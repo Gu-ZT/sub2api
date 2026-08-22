@@ -104,6 +104,13 @@ type antigravityUsageCache struct {
 	timestamp time.Time
 }
 
+// openCodeUsageCache 缓存 OpenCode Go 网关账号的用量数据（支持负缓存）
+type openCodeUsageCache struct {
+	usage     *UsageInfo
+	err       error // 非 nil 表示缓存的错误（负缓存）
+	timestamp time.Time
+}
+
 const (
 	apiCacheTTL         = 3 * time.Minute
 	apiErrorCacheTTL    = 1 * time.Minute        // 负缓存 TTL：429 等错误缓存 1 分钟
@@ -120,8 +127,10 @@ type UsageCache struct {
 	apiCache          sync.Map           // accountID -> *apiUsageCache
 	windowStatsCache  sync.Map           // accountID -> *windowStatsCache
 	antigravityCache  sync.Map           // accountID -> *antigravityUsageCache
+	openCodeCache     sync.Map           // accountID -> *openCodeUsageCache
 	apiFlight         singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
 	antigravityFlight singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
+	openCodeFlight    singleflight.Group // 防止同一 OpenCode Go 账号的并发请求击穿缓存
 	openAIProbeCache  sync.Map           // accountID -> time.Time
 	grokProbeCache    sync.Map           // accountID -> last billing probe attempt
 }
@@ -358,6 +367,17 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 		return s.getPassiveUsageForAccount(ctx, account)
 	}
 
+	// OpenCode Zen Go 网关账号（base_url 指向 opencode.ai/zen/go）：平台仍是
+	// openai / anthropic，但官方用量来自协议无关的 GET /v1/usage（Bearer API Key），
+	// 因此放在平台分发之前拦截。
+	if account.IsOpenCodeGo() {
+		usage, err := s.getOpenCodeGoUsage(ctx, account, forceProbe)
+		if err == nil {
+			s.tryClearRecoverableAccountError(ctx, account)
+		}
+		return usage, err
+	}
+
 	if account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
 		usage, err := s.getOpenAIUsage(ctx, account, forceProbe)
 		if err == nil {
@@ -561,7 +581,9 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 		g.Go(func() error {
 			var usage *UsageInfo
 			var usageErr error
-			if supportsAnthropicPassiveUsage(account) {
+			// OpenCode Go 账号即使平台是 anthropic 也必须走主动链路：
+			// 其用量来自 /v1/usage，Extra 中没有 Anthropic 被动采样数据。
+			if supportsAnthropicPassiveUsage(account) && !account.IsOpenCodeGo() {
 				usage, usageErr = s.getPassiveUsageForAccount(gctx, account)
 			} else {
 				usage, usageErr = s.getUsageForAccount(gctx, account, force)

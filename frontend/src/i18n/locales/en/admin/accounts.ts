@@ -1503,7 +1503,9 @@ export default {
         grokLastProbe: 'Probe {time}',
         grokLastHeadersSeen: 'Headers {time}',
         passiveSampled: 'Passive',
-        activeQuery: 'Query'
+        activeQuery: 'Query',
+        openCodeResetAt: 'Resets at {time}',
+        openCodeResetUnknown: 'Reset time unknown'
       },
       openaiQuotaReset: {
         count: 'Credits',

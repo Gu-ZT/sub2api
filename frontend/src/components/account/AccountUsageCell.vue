@@ -1,8 +1,104 @@
 <template>
   <div ref="rootRef" v-if="showUsageWindows">
+    <!-- OpenCode Zen Go gateway accounts (custom base_url): official /v1/usage windows -->
+    <template v-if="isOpenCodeGoCell">
+      <!-- Loading state -->
+      <div v-if="loading" class="space-y-1.5">
+        <div v-for="i in 3" :key="i" class="flex items-center gap-1">
+          <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-1.5 w-8 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+        </div>
+      </div>
+
+      <!-- Error state -->
+      <div v-else-if="error" class="text-xs text-red-500">
+        {{ error }}
+      </div>
+
+      <!-- Usage data: 5h rolling / weekly / monthly windows, hover shows reset time -->
+      <div v-else-if="hasOpenCodeWindows && usageInfo" class="space-y-1">
+        <UsageProgressBar
+          v-if="usageInfo.five_hour"
+          label="5h"
+          :title="openCodeResetTitle(usageInfo.five_hour.resets_at)"
+          :utilization="usageInfo.five_hour.utilization"
+          :resets-at="usageInfo.five_hour.resets_at"
+          color="indigo"
+        />
+        <UsageProgressBar
+          v-if="usageInfo.seven_day"
+          label="7d"
+          :title="openCodeResetTitle(usageInfo.seven_day.resets_at)"
+          :utilization="usageInfo.seven_day.utilization"
+          :resets-at="usageInfo.seven_day.resets_at"
+          color="emerald"
+        />
+        <UsageProgressBar
+          v-if="usageInfo.thirty_day"
+          label="30d"
+          :title="openCodeResetTitle(usageInfo.thirty_day.resets_at)"
+          :utilization="usageInfo.thirty_day.utilization"
+          :resets-at="usageInfo.thirty_day.resets_at"
+          color="purple"
+        />
+        <div class="flex items-center gap-1.5 mt-0.5">
+          <button
+            type="button"
+            class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="activeQueryLoading"
+            @click="loadActiveUsage"
+          >
+            <svg
+              class="h-2.5 w-2.5"
+              :class="{ 'animate-spin': activeQueryLoading }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            {{ t('admin.accounts.usageWindow.activeQuery') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- No data yet -->
+      <div v-else class="space-y-1">
+        <div class="text-xs text-gray-400">-</div>
+        <button
+          type="button"
+          class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="activeQueryLoading"
+          @click="loadActiveUsage"
+        >
+          <svg
+            class="h-2.5 w-2.5"
+            :class="{ 'animate-spin': activeQueryLoading }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
+          </svg>
+          {{ t('admin.accounts.usageWindow.activeQuery') }}
+        </button>
+      </div>
+    </template>
+
     <!-- Anthropic OAuth and Setup Token accounts: fetch real usage data -->
     <template
-      v-if="
+      v-else-if="
         account.platform === 'anthropic' &&
         (account.type === 'oauth' || account.type === 'setup-token')
       "
@@ -651,7 +747,7 @@ import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
 import CNProviderBalanceCell from './CNProviderBalanceCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
-import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn } from './credentialsBuilder'
+import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn, isOpenCodeGoAccount } from './credentialsBuilder'
 
 // Module-level cache shared across all AccountUsageCell instances
 const _usageCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
@@ -712,8 +808,14 @@ let desktopViewportMediaQuery: MediaQueryList | null = null
 let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = null
 let visibilityObserver: IntersectionObserver | null = null
 
+// OpenCode Zen Go 网关账号（base_url 指向 opencode.ai/zen/go，任意平台/类型）
+const isOpenCodeGoCell = computed(() => isOpenCodeGoAccount(props.account))
+
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
+  // OpenCode Zen Go 网关账号（base_url 指向 opencode.ai/zen/go）：
+  // 官方 /v1/usage 提供滚动用量窗口，与平台/账号类型无关。
+  if (isOpenCodeGoCell.value) return true
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
   if (props.account.platform === 'gemini') return true
   // CN providers: apikey 账号也有滚动用量窗口（coding plan）或余额（payg），
@@ -729,6 +831,7 @@ const showUsageWindows = computed(() => {
 })
 
 const shouldFetchUsage = computed(() => {
+  if (isOpenCodeGoCell.value) return true
   if (props.account.platform === 'anthropic') {
     return props.account.type === 'oauth' || props.account.type === 'setup-token'
   }
@@ -777,6 +880,19 @@ const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
 })
+
+// OpenCode Go：任一窗口有数据即渲染（后端按窗口有无数据返回 null）
+const hasOpenCodeWindows = computed(() => {
+  return !!usageInfo.value && !!(usageInfo.value.five_hour || usageInfo.value.seven_day || usageInfo.value.thirty_day)
+})
+
+// OpenCode Go：悬浮提示展示窗口重置时间（本地化绝对时间）
+const openCodeResetTitle = (resetsAt?: string | null): string => {
+  if (!resetsAt) return t('admin.accounts.usageWindow.openCodeResetUnknown')
+  const date = new Date(resetsAt)
+  if (Number.isNaN(date.getTime())) return t('admin.accounts.usageWindow.openCodeResetUnknown')
+  return t('admin.accounts.usageWindow.openCodeResetAt', { time: date.toLocaleString() })
+}
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))
 

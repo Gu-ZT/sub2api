@@ -448,3 +448,37 @@ export function applyPlanType(
   }
   return credentials
 }
+
+// ===== OpenCode Zen Go 网关账号识别 =====
+// 与后端 service/opencode_usage_service.go 的 isOpenCodeGoBaseURL 保持一致：
+// base_url 指向 opencode.ai/zen/go 的账号（任意平台/类型）用量走官方
+// /v1/usage 端点，在账号列表「用量窗口」单元格渲染 5h / 周限 / 月限。
+
+const OPENCODE_GO_HOSTS = new Set(['opencode.ai', 'www.opencode.ai'])
+
+/** 判断 base_url 字符串是否指向 opencode.ai/zen/go。 */
+export function isOpenCodeGoBaseUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
+  if (!OPENCODE_GO_HOSTS.has(parsed.hostname.toLowerCase())) return false
+  const path = parsed.pathname.toLowerCase().replace(/\/+$/, '')
+  return path === '/zen/go' || path.startsWith('/zen/go/')
+}
+
+/**
+ * 判断账号是否为 OpenCode Zen Go 网关账号（按 credentials.base_url 判定）。
+ * 凭证可能未下发或不含 base_url，缺省返回 false。
+ */
+export function isOpenCodeGoAccount(account?: {
+  credentials?: Record<string, unknown> | null
+} | null): boolean {
+  return isOpenCodeGoBaseUrl(account?.credentials?.base_url)
+}
