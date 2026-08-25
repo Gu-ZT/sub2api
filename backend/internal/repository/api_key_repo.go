@@ -490,6 +490,11 @@ func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, param
 	if err := r.attachLastUsedIPs(ctx, outKeys); err != nil {
 		return nil, nil, err
 	}
+	for i := range outKeys {
+		if err := r.loadGroupRoutes(ctx, &outKeys[i]); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	return outKeys, paginationResultFromTotal(int64(total), params), nil
 }
@@ -509,6 +514,11 @@ func (r *apiKeyRepository) ListAllByUserID(ctx context.Context, userID int64, fi
 	}
 	if err := r.attachLastUsedIPs(ctx, outKeys); err != nil {
 		return nil, err
+	}
+	for i := range outKeys {
+		if err := r.loadGroupRoutes(ctx, &outKeys[i]); err != nil {
+			return nil, err
+		}
 	}
 	return outKeys, nil
 }
@@ -651,6 +661,11 @@ func (r *apiKeyRepository) ListByGroupID(ctx context.Context, groupID int64, par
 	for i := range keys {
 		outKeys = append(outKeys, *apiKeyEntityToService(keys[i]))
 	}
+	for i := range outKeys {
+		if err := r.loadGroupRoutes(ctx, &outKeys[i]); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	return outKeys, paginationResultFromTotal(int64(total), params), nil
 }
@@ -710,6 +725,11 @@ func (r *apiKeyRepository) SearchAPIKeys(ctx context.Context, userID int64, keyw
 	outKeys := make([]service.APIKey, 0, len(keys))
 	for i := range keys {
 		outKeys = append(outKeys, *apiKeyEntityToService(keys[i]))
+	}
+	for i := range outKeys {
+		if err := r.loadGroupRoutes(ctx, &outKeys[i]); err != nil {
+			return nil, err
+		}
 	}
 	return outKeys, nil
 }
