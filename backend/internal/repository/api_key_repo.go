@@ -86,7 +86,11 @@ func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIK
 		}
 		return nil, err
 	}
-	return apiKeyEntityToService(m), nil
+	apiKey := apiKeyEntityToService(m)
+	if err := r.loadGroupRoutes(ctx, apiKey); err != nil {
+		return nil, err
+	}
+	return apiKey, nil
 }
 
 // GetKeyAndOwnerID 根据 API Key ID 获取其 key 与所有者（用户）ID。
@@ -124,7 +128,11 @@ func (r *apiKeyRepository) GetByKey(ctx context.Context, key string) (*service.A
 		}
 		return nil, err
 	}
-	return apiKeyEntityToService(m), nil
+	apiKey := apiKeyEntityToService(m)
+	if err := r.loadGroupRoutes(ctx, apiKey); err != nil {
+		return nil, err
+	}
+	return apiKey, nil
 }
 
 func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*service.APIKey, error) {
@@ -234,7 +242,11 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 		}
 		return nil, err
 	}
-	return apiKeyEntityToService(m), nil
+	apiKey := apiKeyEntityToService(m)
+	if err := r.loadGroupRoutes(ctx, apiKey); err != nil {
+		return nil, err
+	}
+	return apiKey, nil
 }
 
 func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey, fields service.APIKeyUpdateFields) error {
@@ -1030,4 +1042,79 @@ func derefString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// loadGroupRoutes 为 API Key 加载多分组路由（api_key_group_routes 表），
+// 排序规则同 service.SortAPIKeyGroupRoutes（优先级升序，同优先级按 GroupID 升序）。
+func (r *apiKeyRepository) loadGroupRoutes(ctx context.Context, apiKey *service.APIKey) error {
+	if apiKey == nil || r.sql == nil {
+		return nil
+	}
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT group_id, priority
+		FROM api_key_group_routes
+		WHERE key_id = $1
+		ORDER BY priority ASC, group_id ASC`, apiKey.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	routes := make([]service.APIKeyGroupRoute, 0, 8)
+	for rows.Next() {
+		var route service.APIKeyGroupRoute
+		if err := rows.Scan(&route.GroupID, &route.Priority); err != nil {
+			return err
+		}
+		routes = append(routes, route)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	apiKey.GroupRoutes = routes
+	return nil
+}
+
+// SetGroupRoutes 原子替换 API Key 的多分组路由（api_key_group_routes 表）。
+// 空 routes 表示清空多分组配置。与调用方事务联动（嵌套事务时复用现有事务）。
+func (r *apiKeyRepository) SetGroupRoutes(ctx context.Context, keyID int64, routes []service.APIKeyGroupRoute) error {
+	if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
+		return r.replaceGroupRoutes(ctx, existingTx.Client(), keyID, routes)
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+		return err
+	}
+	exec := r.client
+	if err == nil {
+		defer func() { _ = tx.Rollback() }()
+		exec = tx.Client()
+	}
+
+	if err := r.replaceGroupRoutes(ctx, exec, keyID, routes); err != nil {
+		return err
+	}
+
+	if tx != nil {
+		return tx.Commit()
+	}
+	return nil
+}
+
+func (r *apiKeyRepository) replaceGroupRoutes(ctx context.Context, exec *dbent.Client, keyID int64, routes []service.APIKeyGroupRoute) error {
+	if _, err := exec.ExecContext(ctx, `DELETE FROM api_key_group_routes WHERE key_id = $1`, keyID); err != nil {
+		return err
+	}
+	for _, route := range routes {
+		if route.GroupID <= 0 {
+			continue
+		}
+		if _, err := exec.ExecContext(ctx, `
+			INSERT INTO api_key_group_routes (key_id, group_id, priority)
+			VALUES ($1, $2, $3)`, keyID, route.GroupID, route.Priority); err != nil {
+			return err
+		}
+	}
+	return nil
 }

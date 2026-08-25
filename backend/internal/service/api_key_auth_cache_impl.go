@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 20 // v20: group long-context and model pricing fields (force refresh of pre-fix snapshots)
+const apiKeyAuthSnapshotVersion = 21 // v21: api key multi-group routes (force refresh of snapshots lacking group routes)
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -344,6 +344,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		Status:      apiKey.Status,
 		IPWhitelist: apiKey.IPWhitelist,
 		IPBlacklist: apiKey.IPBlacklist,
+		GroupRoutes: apiKey.GroupRoutes,
 		Quota:       apiKey.Quota,
 		QuotaUsed:   apiKey.QuotaUsed,
 		ExpiresAt:   apiKey.ExpiresAt,
@@ -454,6 +455,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 		RateLimit5h: snapshot.RateLimit5h,
 		RateLimit1d: snapshot.RateLimit1d,
 		RateLimit7d: snapshot.RateLimit7d,
+		GroupRoutes: snapshot.GroupRoutes,
 		User: &User{
 			ID:                         snapshot.User.ID,
 			Status:                     snapshot.User.Status,

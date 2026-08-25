@@ -81,4 +81,8 @@ const (
 
 	// ClaudeCodeVersion stores the extracted Claude Code version from User-Agent (e.g. "2.1.22")
 	ClaudeCodeVersion Key = "ctx_claude_code_version"
+
+	// CandidateGroupIDs 多分组路由 API Key 的候选分组序列（按优先级升序）。
+	// 由认证中间件设置，供网关在首选分组无可用账号时降级遍历。
+	CandidateGroupIDs Key = "ctx_candidate_group_ids"
 )

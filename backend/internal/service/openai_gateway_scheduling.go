@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
@@ -254,8 +256,50 @@ func (s *OpenAIGatewayService) SelectAccountForModel(ctx context.Context, groupI
 
 // SelectAccountForModelWithExclusions selects an account supporting the requested model while excluding specified accounts.
 // SelectAccountForModelWithExclusions 选择支持指定模型的账号，同时排除指定的账号。
+// 多分组路由降级：首选分组无可用账号时沿候选序列降级（见 GatewayService 同名方法）。
 func (s *OpenAIGatewayService) SelectAccountForModelWithExclusions(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*Account, error) {
+	if candidates, ok := ctx.Value(ctxkey.CandidateGroupIDs).([]int64); ok && len(candidates) > 1 {
+		return s.selectOpenAIAccountWithRouteFallback(ctx, candidates, groupID, sessionHash, requestedModel, excludedIDs)
+	}
 	return s.selectAccountForModelWithExclusions(s.withOpenAIQuotaAutoPauseContext(ctx), groupID, PlatformOpenAI, sessionHash, requestedModel, excludedIDs, false, 0, "", false)
+}
+
+// selectOpenAIAccountWithRouteFallback 沿候选分组序列（按优先级升序）尝试选账号。
+// 首选分组无可用账号（ErrNoAvailableAccounts）时降级到下一候选。
+func (s *OpenAIGatewayService) selectOpenAIAccountWithRouteFallback(ctx context.Context, candidates []int64, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*Account, error) {
+	order := make([]int64, 0, len(candidates)+1)
+	current := derefGroupID(groupID)
+	if current > 0 {
+		order = append(order, current)
+	}
+	for _, cid := range candidates {
+		if cid == current {
+			continue
+		}
+		order = append(order, cid)
+	}
+
+	var lastErr error
+	seen := make(map[int64]struct{}, len(order))
+	for _, cid := range order {
+		if _, ok := seen[cid]; ok {
+			continue
+		}
+		seen[cid] = struct{}{}
+		candID := cid
+		acc, err := s.selectAccountForModelWithExclusions(s.withOpenAIQuotaAutoPauseContext(ctx), &candID, PlatformOpenAI, sessionHash, requestedModel, excludedIDs, false, 0, "", false)
+		if err == nil {
+			return acc, nil
+		}
+		lastErr = err
+		if !errors.Is(err, ErrNoAvailableAccounts) {
+			return nil, err
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, ErrNoAvailableAccounts
 }
 
 // SelectAccountForTokenCount selects an account for a non-billable token-count

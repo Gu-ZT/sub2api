@@ -142,16 +142,16 @@
                 :title="t('keys.clickToChangeGroup')"
               >
                 <GroupBadge
-                  v-if="row.group"
-                  :name="row.group.name"
-                  :platform="row.group.platform"
-                  :subscription-type="row.group.subscription_type"
-                  :rate-multiplier="row.group.rate_multiplier"
-                  :user-rate-multiplier="userGroupRates[row.group.id]"
-                  :peak-rate-enabled="row.group.peak_rate_enabled"
-                  :peak-start="row.group.peak_start"
-                  :peak-end="row.group.peak_end"
-                  :peak-rate-multiplier="row.group.peak_rate_multiplier"
+                  v-if="primaryRouteGroup(row)"
+                  :name="primaryRouteGroup(row)!.name"
+                  :platform="primaryRouteGroup(row)!.platform"
+                  :subscription-type="primaryRouteGroup(row)!.subscription_type"
+                  :rate-multiplier="primaryRouteGroup(row)!.rate_multiplier"
+                  :user-rate-multiplier="userGroupRates[primaryRouteGroup(row)!.id]"
+                  :peak-rate-enabled="primaryRouteGroup(row)!.peak_rate_enabled"
+                  :peak-start="primaryRouteGroup(row)!.peak_start"
+                  :peak-end="primaryRouteGroup(row)!.peak_end"
+                  :peak-rate-multiplier="primaryRouteGroup(row)!.peak_rate_multiplier"
                 />
                 <span v-else class="text-sm text-gray-400 dark:text-dark-500">{{
                   t('keys.noGroup')
@@ -505,6 +505,65 @@
               />
             </template>
           </Select>
+        </div>
+
+        <!-- Multi-Group Routing Section -->
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <label class="input-label mb-0">{{ t('keys.multiGroupRouting') }}</label>
+            <button
+              type="button"
+              @click="toggleMultiGroup"
+              :class="[
+                'relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
+                formData.enable_multi_group ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+              ]"
+            >
+              <span
+                :class="[
+                  'pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  formData.enable_multi_group ? 'translate-x-4' : 'translate-x-0'
+                ]"
+              />
+            </button>
+          </div>
+          <p v-if="!formData.enable_multi_group" class="input-hint">{{ t('keys.multiGroupRoutingHint') }}</p>
+          <div v-else class="space-y-3 pt-1">
+            <div
+              v-for="(route, idx) in formData.group_routes"
+              :key="idx"
+              class="flex items-center gap-2"
+            >
+              <Select
+                v-model="route.group_id"
+                :options="routeGroupOptions(idx)"
+                :searchable="true"
+                class="flex-1"
+                :placeholder="t('keys.selectGroup')"
+              />
+              <input
+                v-model.number="route.priority"
+                type="number"
+                min="1"
+                step="1"
+                class="input w-20 text-center"
+                :title="t('keys.priority')"
+                :aria-label="t('keys.priority')"
+              />
+              <button
+                type="button"
+                class="btn btn-ghost text-sm text-red-500"
+                :title="t('keys.removeGroup')"
+                @click="removeRoute(idx)"
+              >
+                &times;
+              </button>
+            </div>
+            <button type="button" class="btn btn-secondary text-sm" @click="addRoute">
+              + {{ t('keys.addGroup') }}
+            </button>
+            <p class="input-hint">{{ t('keys.multiGroupRoutingEditorHint') }}</p>
+          </div>
         </div>
 
         <!-- Custom Key Section (only for create) -->
@@ -1140,7 +1199,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 	import EndpointPopover from '@/components/keys/EndpointPopover.vue'
 	import GroupBadge from '@/components/common/GroupBadge.vue'
 	import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
-	import type { ApiKey, Group, PublicSettings, SubscriptionType, GroupPlatform, UpdateApiKeyRequest } from '@/types'
+	import type { ApiKey, Group, PublicSettings, SubscriptionType, GroupPlatform, UpdateApiKeyRequest, APIKeyGroupRoute } from '@/types'
 import type { Column } from '@/components/common/types'
 import type { BatchApiKeyUsageStats } from '@/api/usage'
 import { formatDateTime } from '@/utils/format'
@@ -1333,6 +1392,9 @@ const formData = ref({
   status: 'active' as 'active' | 'inactive',
   use_custom_key: false,
   custom_key: '',
+  // 多分组路由
+  enable_multi_group: false,
+  group_routes: [] as { group_id: number | null; priority: number }[],
   enable_ip_restriction: false,
   ip_whitelist: '',
   ip_blacklist: '',
@@ -1434,6 +1496,61 @@ const filteredGroupOptions = computed(() => {
       (opt.description && opt.description.toLowerCase().includes(query))
   })
 })
+
+// ── 多分组路由编辑器 ──────────────────────────────────────────────
+// 允许为 API Key 配置多个分组与优先级。开关关闭时走单分组逻辑。
+const toggleMultiGroup = () => {
+  formData.value.enable_multi_group = !formData.value.enable_multi_group
+  if (formData.value.enable_multi_group) {
+    if (formData.value.group_routes.length === 0) {
+      addRoute()
+    }
+  } else {
+    formData.value.group_routes = []
+  }
+}
+
+interface RouteDraft {
+  group_id: number | null
+  priority: number
+}
+
+const addRoute = () => {
+  const priorities = formData.value.group_routes.map((r) => r.priority || 0)
+  const nextPriority = priorities.length ? Math.max(...priorities) + 1 : 1
+  formData.value.group_routes.push({ group_id: null, priority: nextPriority } as RouteDraft)
+}
+
+const removeRoute = (idx: number) => {
+  formData.value.group_routes.splice(idx, 1)
+}
+
+// 多分组编辑器里每个分组行的可选列表：排除已在其他行选中的分组。
+const routeGroupOptions = (idx: number) =>
+  groupOptions.value.filter((opt) => {
+    if (opt.value === null) return true
+    return !formData.value.group_routes.some((route, i) => i !== idx && route.group_id === opt.value)
+  })
+
+// 将草稿路由转成提交结构（过滤未选分组），并按优先级升序、同优先级按 group_id 升序排序。
+const normalizeGroupRoutes = (): APIKeyGroupRoute[] =>
+  formData.value.group_routes
+    .filter((r) => r.group_id != null)
+    .map((r) => ({ group_id: r.group_id as number, priority: r.priority || 1 }))
+    .sort((a, b) => a.priority - b.priority || a.group_id - b.group_id)
+
+// 列表展示用：多分组密钥只显示优先级最高分组中的第一个分组。
+// 返回该分组的 Group 对象（从全部分组匹配）；无多分组路由时回退到 row.group。
+const primaryRouteGroup = (key: ApiKey): Group | undefined => {
+  const routes = (key.group_routes || [])
+    .slice()
+    .sort((a, b) => a.priority - b.priority || a.group_id - b.group_id)
+  if (routes.length === 0) {
+    return key.group
+  }
+  const gid = routes[0].group_id
+  return groups.value.find((g) => g.id === gid) ?? key.group
+}
 
 const copyToClipboard = async (text: string, keyId: number) => {
   const success = await clipboardCopy(text, t('keys.copied'))
@@ -1561,12 +1678,15 @@ const editKey = (key: ApiKey) => {
   selectedKey.value = key
   const hasIPRestriction = (key.ip_whitelist?.length > 0) || (key.ip_blacklist?.length > 0)
   const hasExpiration = !!key.expires_at
+  const keyRoutes = (key.group_routes || []).map((r) => ({ group_id: r.group_id, priority: r.priority }))
   formData.value = {
     name: key.name,
     group_id: key.group_id,
     status: key.status === 'quota_exhausted' || key.status === 'expired' ? 'inactive' : key.status,
     use_custom_key: false,
     custom_key: '',
+    enable_multi_group: keyRoutes.length > 0,
+    group_routes: keyRoutes.length > 0 ? keyRoutes : [],
     enable_ip_restriction: hasIPRestriction,
     ip_whitelist: (key.ip_whitelist || []).join('\n'),
     ip_blacklist: (key.ip_blacklist || []).join('\n'),
@@ -1662,8 +1782,14 @@ const confirmDelete = (key: ApiKey) => {
 }
 
 const handleSubmit = async () => {
-  // Validate group_id is required
-  if (formData.value.group_id === null) {
+  // 多分组路由：开启时校验至少一条有效分组；否则校验单分组 group_id。
+  const normalizedRoutes = normalizeGroupRoutes()
+  if (formData.value.enable_multi_group) {
+    if (normalizedRoutes.length === 0) {
+      appStore.showError(t('keys.multiGroupRequired'))
+      return
+    }
+  } else if (formData.value.group_id === null) {
     appStore.showError(t('keys.groupRequired'))
     return
   }
@@ -1729,6 +1855,9 @@ const handleSubmit = async () => {
         rate_limit_1d: rateLimitData.rate_limit_1d,
         rate_limit_7d: rateLimitData.rate_limit_7d,
       }
+      if (formData.value.enable_multi_group) {
+        updates.group_routes = normalizedRoutes
+      }
       if (shouldSubmitEditStatus(selectedKey.value, formData.value.status)) {
         updates.status = formData.value.status
       }
@@ -1736,15 +1865,20 @@ const handleSubmit = async () => {
       appStore.showSuccess(t('keys.keyUpdatedSuccess'))
     } else {
       const customKey = formData.value.use_custom_key ? formData.value.custom_key : undefined
+      // 多分组开启时，单分组字段取最高优先级第一分组（列表展示用）。
+      const effectiveGroupId = formData.value.enable_multi_group
+        ? (normalizedRoutes[0]?.group_id ?? formData.value.group_id)
+        : formData.value.group_id
       await keysAPI.create(
         formData.value.name,
-        formData.value.group_id,
+        effectiveGroupId,
         customKey,
         ipWhitelist,
         ipBlacklist,
         quota,
         expiresInDays,
-        rateLimitData
+        rateLimitData,
+        formData.value.enable_multi_group ? normalizedRoutes : undefined
       )
       appStore.showSuccess(t('keys.keyCreatedSuccess'))
       // Only advance tour if active, on submit step, and creation succeeded
@@ -1793,6 +1927,8 @@ const closeModals = () => {
     status: 'active',
     use_custom_key: false,
     custom_key: '',
+    enable_multi_group: false,
+    group_routes: [],
     enable_ip_restriction: false,
     ip_whitelist: '',
     ip_blacklist: '',

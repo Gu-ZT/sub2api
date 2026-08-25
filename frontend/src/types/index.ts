@@ -719,6 +719,8 @@ export interface ApiKey {
   updated_at: string
   current_concurrency: number
   group?: Group
+  // 多分组路由（可选）。非空时启用多分组路由（优先级 + 会话粘性）。
+  group_routes?: APIKeyGroupRoute[]
   rate_limit_5h: number
   rate_limit_1d: number
   rate_limit_7d: number
@@ -733,9 +735,16 @@ export interface ApiKey {
   reset_7d_at: string | null
 }
 
+// API Key 多分组路由：优先级数字越小越优先（1 最高），同优先级按会话 ID 粘性分配。
+export interface APIKeyGroupRoute {
+  group_id: number
+  priority: number
+}
+
 export interface CreateApiKeyRequest {
   name: string
   group_id?: number | null
+  group_routes?: APIKeyGroupRoute[] // 多分组路由（可选）
   custom_key?: string // Optional custom API Key
   ip_whitelist?: string[]
   ip_blacklist?: string[]
@@ -749,6 +758,7 @@ export interface CreateApiKeyRequest {
 export interface UpdateApiKeyRequest {
   name?: string
   group_id?: number | null
+  group_routes?: APIKeyGroupRoute[] // 多分组路由（nil 不修改，空数组清空）
   status?: 'active' | 'inactive'
   ip_whitelist?: string[]
   ip_blacklist?: string[]

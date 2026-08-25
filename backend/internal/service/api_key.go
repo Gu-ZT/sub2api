@@ -36,6 +36,10 @@ type APIKey struct {
 	Status      string
 	IPWhitelist []string
 	IPBlacklist []string
+	// GroupRoutes 多分组路由（可选）。为空时走原单分组 GroupID 逻辑；
+	// 非空时按路由规则（优先级 + 会话粘性）选取请求实际使用的分组。
+	// 存储在 api_key_group_routes 关联表，非 api_keys 列。
+	GroupRoutes []APIKeyGroupRoute
 	// 预编译的 IP 规则，用于认证热路径避免重复 ParseIP/ParseCIDR。
 	CompiledIPWhitelist *ip.CompiledIPRules `json:"-"`
 	CompiledIPBlacklist *ip.CompiledIPRules `json:"-"`
