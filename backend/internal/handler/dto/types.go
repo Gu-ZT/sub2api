@@ -83,8 +83,17 @@ type APIKey struct {
 	Reset1dAt     *time.Time `json:"reset_1d_at,omitempty"`
 	Reset7dAt     *time.Time `json:"reset_7d_at,omitempty"`
 
+	// 多分组路由（可选）：为空表示未启用多分组路由。
+	GroupRoutes []GroupRouteDTO `json:"group_routes,omitempty"`
+
 	User  *User  `json:"user,omitempty"`
 	Group *Group `json:"group,omitempty"`
+}
+
+// GroupRouteDTO 是 API Key 多分组路由的 DTO 表示（group_id + 优先级）。
+type GroupRouteDTO struct {
+	GroupID  int64 `json:"group_id"`
+	Priority int   `json:"priority"`
 }
 
 type Group struct {

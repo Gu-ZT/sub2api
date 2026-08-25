@@ -108,6 +108,15 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		User:               UserFromServiceShallow(k.User),
 		Group:              GroupFromServiceShallow(k.Group),
 	}
+	if len(k.GroupRoutes) > 0 {
+		out.GroupRoutes = make([]GroupRouteDTO, 0, len(k.GroupRoutes))
+		for _, route := range k.GroupRoutes {
+			out.GroupRoutes = append(out.GroupRoutes, GroupRouteDTO{
+				GroupID:  route.GroupID,
+				Priority: route.Priority,
+			})
+		}
+	}
 	if k.Window5hStart != nil && !service.IsWindowExpired(k.Window5hStart, service.RateLimitWindow5h) {
 		t := k.Window5hStart.Add(service.RateLimitWindow5h)
 		out.Reset5hAt = &t
