@@ -28,6 +28,16 @@ func newAPIKeyRepoSQLite(t *testing.T) (*apiKeyRepository, *dbent.Client) {
 	_, err = db.Exec("PRAGMA foreign_keys = ON")
 	require.NoError(t, err)
 
+	// 多分组路由关联表（原生 SQL 表，不在 ent schema 内，测试需手动建表）。
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS api_key_group_routes (
+		key_id BIGINT NOT NULL,
+		group_id BIGINT NOT NULL,
+		priority INT NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (key_id, group_id)
+	)`)
+	require.NoError(t, err)
+
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
 	t.Cleanup(func() { _ = client.Close() })
