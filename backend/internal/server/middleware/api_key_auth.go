@@ -157,6 +157,25 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			AbortWithError(c, 401, "USER_INACTIVE", "User account is not active")
 			return
 		}
+		// 多分组路由解析：若 API Key 配置了多分组路由（GroupRoutes 非空），
+		// 按「优先级 + 会话粘性」解析本次请求应使用的分组，覆盖单分组字段，
+		// 并把候选分组序列注入上下文，供网关在首选分组无可用账号时降级遍历。
+		if len(apiKey.GroupRoutes) > 0 {
+			routeSessionID := strings.TrimSpace(c.GetHeader("x-session-id"))
+			routedGroupID, routedGroup, candidates, resolveErr := apiKeyService.ResolveAPIKeyRoutingGroup(c.Request.Context(), apiKey, routeSessionID)
+			if resolveErr == nil && routedGroupID > 0 {
+				gid := routedGroupID
+				apiKey.GroupID = &gid
+				if routedGroup != nil {
+					apiKey.Group = routedGroup
+				}
+				setGroupContext(c, routedGroup)
+				if len(candidates) > 0 {
+					routeCtx := context.WithValue(c.Request.Context(), ctxkey.CandidateGroupIDs, candidates)
+					c.Request = c.Request.WithContext(routeCtx)
+				}
+			}
+		}
 		if abortIfAPIKeyGroupUnavailable(c, apiKey) {
 			return
 		}

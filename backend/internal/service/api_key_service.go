@@ -119,6 +119,10 @@ type APIKeyRepository interface {
 	IncrementRateLimitUsage(ctx context.Context, id int64, cost float64) error
 	ResetRateLimitWindows(ctx context.Context, id int64) error
 	GetRateLimitData(ctx context.Context, id int64) (*APIKeyRateLimitData, error)
+
+	// SetGroupRoutes 原子替换 API Key 的多分组路由（api_key_group_routes 表）。
+	// 空切片表示清空多分组配置（回退到单分组 GroupID 逻辑）。
+	SetGroupRoutes(ctx context.Context, keyID int64, routes []APIKeyGroupRoute) error
 }
 
 type apiKeyAllByUserIDLister interface {
@@ -215,6 +219,10 @@ type CreateAPIKeyRequest struct {
 	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单
 	IPBlacklist []string `json:"ip_blacklist"` // IP 黑名单
 
+	// GroupRoutes 多分组路由（可选）。非空时启用多分组路由，GroupID
+	// 仍作为向后兼容的单分组字段保留（列表展示用最高优先级第一分组）。
+	GroupRoutes *[]APIKeyGroupRoute `json:"group_routes,omitempty"`
+
 	// Quota fields
 	Quota         float64 `json:"quota"`           // Quota limit in USD (0 = unlimited)
 	ExpiresInDays *int    `json:"expires_in_days"` // Days until expiry (nil = never expires)
@@ -244,6 +252,9 @@ type UpdateAPIKeyRequest struct {
 	RateLimit1d         *float64 `json:"rate_limit_1d"`
 	RateLimit7d         *float64 `json:"rate_limit_7d"`
 	ResetRateLimitUsage *bool    `json:"reset_rate_limit_usage"` // Reset all usage counters to 0
+
+	// GroupRoutes 多分组路由（nil 不修改，空切片清空多分组配置）。
+	GroupRoutes *[]APIKeyGroupRoute `json:"group_routes,omitempty"`
 }
 
 func validateAPIKeyLimit(v float64) error {
@@ -554,6 +565,14 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 	if err := s.apiKeyRepo.Create(ctx, apiKey); err != nil {
 		return nil, fmt.Errorf("create api key: %w", err)
+	}
+
+	// 多分组路由：创建后写入关联表（原子替换）。
+	if req.GroupRoutes != nil {
+		if err := s.apiKeyRepo.SetGroupRoutes(ctx, apiKey.ID, *req.GroupRoutes); err != nil {
+			return nil, fmt.Errorf("create api key group routes: %w", err)
+		}
+		apiKey.GroupRoutes = *req.GroupRoutes
 	}
 
 	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
@@ -900,6 +919,14 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 
 	if err := s.apiKeyRepo.Update(ctx, apiKey, fields); err != nil {
 		return nil, fmt.Errorf("update api key: %w", err)
+	}
+
+	// 多分组路由：req.GroupRoutes 非 nil 时原子替换关联表（空切片即清空）。
+	if req.GroupRoutes != nil {
+		if err := s.apiKeyRepo.SetGroupRoutes(ctx, apiKey.ID, *req.GroupRoutes); err != nil {
+			return nil, fmt.Errorf("update api key group routes: %w", err)
+		}
+		apiKey.GroupRoutes = *req.GroupRoutes
 	}
 
 	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)

@@ -6,6 +6,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	mathrand "math/rand"
@@ -31,7 +32,59 @@ func (s *GatewayService) SelectAccountForModel(ctx context.Context, groupID *int
 }
 
 // SelectAccountForModelWithExclusions selects an account supporting the requested model while excluding specified accounts.
+//
+// 多分组路由降级：当 API Key 配置了多分组路由时，认证中间件会把候选分组序列
+// （按优先级升序）写入 ctx CandidateGroupIDs。首选分组若无可用账号，则沿候选
+// 序列降级重试，直到某分组选出账号或所有分组都无可用账号。
 func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*Account, error) {
+	if candidates, ok := ctx.Value(ctxkey.CandidateGroupIDs).([]int64); ok && len(candidates) > 1 {
+		return s.selectAccountWithRouteFallback(ctx, candidates, groupID, sessionHash, requestedModel, excludedIDs)
+	}
+	return s.selectAccountForModelWithExclusionsSingle(ctx, groupID, sessionHash, requestedModel, excludedIDs)
+}
+
+// selectAccountWithRouteFallback 沿候选分组序列（按优先级升序）尝试选账号。
+// 当前请求的 groupID 若在候选序列中，则从该分组开始；否则从候选首位开始。
+// 首选分组无可用账号（ErrNoAvailableAccounts）时降级到下一候选。
+func (s *GatewayService) selectAccountWithRouteFallback(ctx context.Context, candidates []int64, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*Account, error) {
+	order := make([]int64, 0, len(candidates)+1)
+	current := derefGroupID(groupID)
+	if current > 0 {
+		order = append(order, current)
+	}
+	for _, cid := range candidates {
+		if cid == current {
+			continue
+		}
+		order = append(order, cid)
+	}
+
+	var lastErr error
+	seen := make(map[int64]struct{}, len(order))
+	for _, cid := range order {
+		if _, ok := seen[cid]; ok {
+			continue
+		}
+		seen[cid] = struct{}{}
+		candID := cid
+		acc, err := s.selectAccountForModelWithExclusionsSingle(ctx, &candID, sessionHash, requestedModel, excludedIDs)
+		if err == nil {
+			return acc, nil
+		}
+		lastErr = err
+		if !errors.Is(err, ErrNoAvailableAccounts) {
+			// 非「无可用账号」错误（如分组不存在）不降级，直接返回。
+			return nil, err
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, ErrNoAvailableAccounts
+}
+
+// selectAccountForModelWithExclusionsSingle 在单个分组内选择账号。
+func (s *GatewayService) selectAccountForModelWithExclusionsSingle(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*Account, error) {
 	// 优先检查 context 中的强制平台（/antigravity 路由）
 	var platform string
 	forcePlatform, hasForcePlatform := ctx.Value(ctxkey.ForcePlatform).(string)

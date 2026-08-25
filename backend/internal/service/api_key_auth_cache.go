@@ -14,6 +14,8 @@ type APIKeyAuthSnapshot struct {
 	IPBlacklist []string                 `json:"ip_blacklist,omitempty"`
 	User        APIKeyAuthUserSnapshot   `json:"user"`
 	Group       *APIKeyAuthGroupSnapshot `json:"group,omitempty"`
+	// GroupRoutes 多分组路由（可选）。为空时走原单分组 GroupID 逻辑。
+	GroupRoutes []APIKeyGroupRoute `json:"group_routes,omitempty"`
 
 	// Quota fields for API Key independent quota feature
 	Quota     float64 `json:"quota"`      // Quota limit in USD (0 = unlimited)
