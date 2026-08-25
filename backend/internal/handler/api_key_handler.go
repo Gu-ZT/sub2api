@@ -40,6 +40,9 @@ type CreateAPIKeyRequest struct {
 	Quota         *float64 `json:"quota"`           // 配额限制 (USD)
 	ExpiresInDays *int     `json:"expires_in_days"` // 过期天数
 
+	// 多分组路由（可选）：group_id 仍保留用于列表展示（取最高优先级第一分组）。
+	GroupRoutes *[]service.APIKeyGroupRoute `json:"group_routes,omitempty"`
+
 	// Rate limit fields (0 = unlimited)
 	RateLimit5h *float64 `json:"rate_limit_5h"`
 	RateLimit1d *float64 `json:"rate_limit_1d"`
@@ -56,6 +59,9 @@ type UpdateAPIKeyRequest struct {
 	Quota       *float64  `json:"quota"`        // 配额限制 (USD), 0=无限制
 	ExpiresAt   *string   `json:"expires_at"`   // 过期时间 (ISO 8601)
 	ResetQuota  *bool     `json:"reset_quota"`  // 重置已用配额
+
+	// 多分组路由（nil 不修改，空数组清空多分组配置）。
+	GroupRoutes *[]service.APIKeyGroupRoute `json:"group_routes,omitempty"`
 
 	// Rate limit fields (nil = no change, 0 = unlimited)
 	RateLimit5h         *float64 `json:"rate_limit_5h"`
@@ -203,6 +209,7 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		IPWhitelist:   req.IPWhitelist,
 		IPBlacklist:   req.IPBlacklist,
 		ExpiresInDays: req.ExpiresInDays,
+		GroupRoutes:   req.GroupRoutes,
 	}
 	if req.Quota != nil {
 		svcReq.Quota = *req.Quota
@@ -260,6 +267,7 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 		RateLimit1d:         req.RateLimit1d,
 		RateLimit7d:         req.RateLimit7d,
 		ResetRateLimitUsage: req.ResetRateLimitUsage,
+		GroupRoutes:         req.GroupRoutes,
 	}
 	if req.Name != "" {
 		svcReq.Name = &req.Name
