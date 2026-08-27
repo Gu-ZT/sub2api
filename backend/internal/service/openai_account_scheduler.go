@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -2145,6 +2146,35 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
 // quarantine checks bypassed, so healthy proxies always win the first pass
 // and quarantined ones only serve when nothing else can.
 func (s *OpenAIGatewayService) selectAccountWithScheduler(
+	ctx context.Context,
+	groupID *int64,
+	previousResponseID string,
+	sessionHash string,
+	requestedModel string,
+	excludedIDs map[int64]struct{},
+	requiredTransport OpenAIUpstreamTransport,
+	requiredCapability OpenAIEndpointCapability,
+	requiredImageCapability OpenAIImagesCapability,
+	requireCompact bool,
+	platform string,
+	previousResponseCanMove bool,
+	useUpstreamTokenCost bool,
+) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	if candidates, ok := ctx.Value(ctxkey.CandidateGroupIDs).([]int64); ok && len(candidates) > 1 {
+		type routeResult struct {
+			selection *AccountSelectionResult
+			decision  OpenAIAccountScheduleDecision
+		}
+		result, err := selectWithGroupRouteFallback(candidates, derefGroupID(groupID), func(candidateID int64) (routeResult, error) {
+			selection, decision, selectErr := s.selectAccountWithSchedulerSingle(ctx, &candidateID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+			return routeResult{selection: selection, decision: decision}, selectErr
+		})
+		return result.selection, result.decision, err
+	}
+	return s.selectAccountWithSchedulerSingle(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, requiredImageCapability, requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+}
+
+func (s *OpenAIGatewayService) selectAccountWithSchedulerSingle(
 	ctx context.Context,
 	groupID *int64,
 	previousResponseID string,

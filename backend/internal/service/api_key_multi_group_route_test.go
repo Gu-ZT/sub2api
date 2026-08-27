@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestSortAPIKeyGroupRoutes_OrderByPriorityThenGroupID(t *testing.T) {
 	routes := []APIKeyGroupRoute{
@@ -122,6 +125,61 @@ func TestSelectGroupForSession_NoSessionIDPicksLowestGroupID(t *testing.T) {
 	}
 	if got := SelectGroupForSession(routes, "", allAvailable); got != 10 {
 		t.Fatalf("expected 10 without session id, got %d", got)
+	}
+}
+
+func TestSelectWithGroupRouteFallback_TriesNextGroupAfterUnavailable(t *testing.T) {
+	attempts := make([]int64, 0, 3)
+	result, err := selectWithGroupRouteFallback([]int64{10, 20, 30}, 20, func(groupID int64) (int64, error) {
+		attempts = append(attempts, groupID)
+		if groupID == 30 {
+			return groupID, nil
+		}
+		return 0, ErrNoAvailableAccounts
+	})
+	if err != nil {
+		t.Fatalf("selectWithGroupRouteFallback returned error: %v", err)
+	}
+	if result != 30 {
+		t.Fatalf("result = %d, want 30", result)
+	}
+	want := []int64{20, 10, 30}
+	for i := range want {
+		if attempts[i] != want[i] {
+			t.Fatalf("attempts = %v, want %v", attempts, want)
+		}
+	}
+}
+
+func TestSelectWithGroupRouteFallback_TriesNextGroupAfterCompactUnavailable(t *testing.T) {
+	attempts := 0
+	result, err := selectWithGroupRouteFallback([]int64{10, 20}, 10, func(groupID int64) (int64, error) {
+		attempts++
+		if groupID == 20 {
+			return groupID, nil
+		}
+		return 0, ErrNoAvailableCompactAccounts
+	})
+	if err != nil || result != 20 {
+		t.Fatalf("result = %d, error = %v, want group 20", result, err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+func TestSelectWithGroupRouteFallback_StopsOnNonAvailabilityError(t *testing.T) {
+	terminalErr := errors.New("group lookup failed")
+	attempts := 0
+	_, err := selectWithGroupRouteFallback([]int64{10, 20}, 10, func(groupID int64) (int64, error) {
+		attempts++
+		return 0, terminalErr
+	})
+	if !errors.Is(err, terminalErr) {
+		t.Fatalf("error = %v, want %v", err, terminalErr)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }
 

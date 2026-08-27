@@ -1147,6 +1147,19 @@ func (s *OpenAIGatewayService) isBetterAccount(candidate, current *Account) bool
 
 // SelectAccountWithLoadAwareness selects an account with load-awareness and wait plan.
 func (s *OpenAIGatewayService) SelectAccountWithLoadAwareness(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*AccountSelectionResult, error) {
+	if candidates, ok := ctx.Value(ctxkey.CandidateGroupIDs).([]int64); ok && len(candidates) > 1 {
+		return s.selectOpenAIAccountWithLoadAwarenessRouteFallback(ctx, candidates, groupID, sessionHash, requestedModel, excludedIDs)
+	}
+	return s.selectAccountWithLoadAwarenessSingle(ctx, groupID, sessionHash, requestedModel, excludedIDs)
+}
+
+func (s *OpenAIGatewayService) selectOpenAIAccountWithLoadAwarenessRouteFallback(ctx context.Context, candidates []int64, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*AccountSelectionResult, error) {
+	return selectWithGroupRouteFallback(candidates, derefGroupID(groupID), func(candidateID int64) (*AccountSelectionResult, error) {
+		return s.selectAccountWithLoadAwarenessSingle(ctx, &candidateID, sessionHash, requestedModel, excludedIDs)
+	})
+}
+
+func (s *OpenAIGatewayService) selectAccountWithLoadAwarenessSingle(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*AccountSelectionResult, error) {
 	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
 	ctx = s.withOpenAIGroupPrivacyRequirement(ctx, groupID)
 	// 分组利润控制：legacy 公共入口同样装门，保证不经
