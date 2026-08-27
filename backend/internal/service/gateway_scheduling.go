@@ -151,6 +151,23 @@ func (s *GatewayService) selectAccountForModelWithExclusionsSingle(ctx context.C
 // metadataUserID: 用于客户端亲和调度，从中提取客户端 ID
 // sub2apiUserID: 系统用户 ID，用于二维亲和调度
 func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, metadataUserID string, sub2apiUserID int64) (*AccountSelectionResult, error) {
+	if candidates, ok := ctx.Value(ctxkey.CandidateGroupIDs).([]int64); ok && len(candidates) > 1 {
+		return s.selectAccountWithLoadAwarenessRouteFallback(ctx, candidates, groupID, sessionHash, requestedModel, excludedIDs, metadataUserID, sub2apiUserID)
+	}
+	return s.selectAccountWithLoadAwarenessSingle(ctx, groupID, sessionHash, requestedModel, excludedIDs, metadataUserID, sub2apiUserID)
+}
+
+// selectAccountWithLoadAwarenessRouteFallback 在每个候选分组上执行完整的负载感知选号。
+// 只有当前分组没有可用账号时才降级，避免绕过负载、模型和会话限制。
+func (s *GatewayService) selectAccountWithLoadAwarenessRouteFallback(ctx context.Context, candidates []int64, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, metadataUserID string, sub2apiUserID int64) (*AccountSelectionResult, error) {
+	// 单分组实现内部会调用普通选号入口，屏蔽候选 context 避免递归遍历。
+	routeCtx := context.WithValue(ctx, ctxkey.CandidateGroupIDs, nil)
+	return selectWithGroupRouteFallback(candidates, derefGroupID(groupID), func(candidateID int64) (*AccountSelectionResult, error) {
+		return s.selectAccountWithLoadAwarenessSingle(routeCtx, &candidateID, sessionHash, requestedModel, excludedIDs, metadataUserID, sub2apiUserID)
+	})
+}
+
+func (s *GatewayService) selectAccountWithLoadAwarenessSingle(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, metadataUserID string, sub2apiUserID int64) (*AccountSelectionResult, error) {
 	// 调试日志：记录调度入口参数
 	excludedIDsList := make([]int64, 0, len(excludedIDs))
 	for id := range excludedIDs {

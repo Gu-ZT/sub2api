@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"sort"
 	"strings"
 )
@@ -152,6 +153,41 @@ func routeCandidateIDs(routes []APIKeyGroupRoute) []int64 {
 		ids = append(ids, r.GroupID)
 	}
 	return ids
+}
+
+// selectWithGroupRouteFallback 从当前分组开始遍历候选分组。
+// 仅账号不可用错误会触发降级，其它错误立即返回。
+func selectWithGroupRouteFallback[T any](candidates []int64, current int64, selectOne func(groupID int64) (T, error)) (T, error) {
+	var zero T
+	order := make([]int64, 0, len(candidates)+1)
+	if current > 0 {
+		order = append(order, current)
+	}
+	order = append(order, candidates...)
+
+	var lastErr error
+	seen := make(map[int64]struct{}, len(order))
+	for _, groupID := range order {
+		if groupID <= 0 {
+			continue
+		}
+		if _, ok := seen[groupID]; ok {
+			continue
+		}
+		seen[groupID] = struct{}{}
+		result, err := selectOne(groupID)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if !errors.Is(err, ErrNoAvailableAccounts) && !errors.Is(err, ErrNoAvailableCompactAccounts) {
+			return zero, err
+		}
+	}
+	if lastErr != nil {
+		return zero, lastErr
+	}
+	return zero, ErrNoAvailableAccounts
 }
 
 // ResolveAPIKeyRoutingGroup 为 API Key 的多分组路由解析本次请求应使用的分组。
