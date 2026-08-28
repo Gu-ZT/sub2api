@@ -112,15 +112,18 @@ func (s *AccountUsageService) getOpenCodeGoUsage(ctx context.Context, account *A
 	// 2. singleflight 防止并发击穿
 	flightKey := fmt.Sprintf("opencode-usage:%d", accountID)
 	result, flightErr, _ := s.cache.openCodeFlight.Do(flightKey, func() (any, error) {
-		// 再次检查缓存（可能在等待 singleflight 期间被其他请求填充）
-		if cached, ok := s.cache.openCodeCache.Load(accountID); ok {
-			if cache, ok := cached.(*openCodeUsageCache); ok {
-				age := time.Since(cache.timestamp)
-				if cache.err != nil && age < apiErrorCacheTTL {
-					return nil, cache.err
-				}
-				if cache.usage != nil && cache.err == nil && age < apiCacheTTL {
-					return cache.usage, nil
+		// 再次检查缓存（可能在等待 singleflight 期间被其他请求填充）；
+		// force=true 时跳过，确保主动查询真实打到上游。
+		if !force {
+			if cached, ok := s.cache.openCodeCache.Load(accountID); ok {
+				if cache, ok := cached.(*openCodeUsageCache); ok {
+					age := time.Since(cache.timestamp)
+					if cache.err != nil && age < apiErrorCacheTTL {
+						return nil, cache.err
+					}
+					if cache.usage != nil && cache.err == nil && age < apiCacheTTL {
+						return cache.usage, nil
+					}
 				}
 			}
 		}

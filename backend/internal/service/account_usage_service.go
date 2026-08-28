@@ -111,6 +111,13 @@ type openCodeUsageCache struct {
 	timestamp time.Time
 }
 
+// commandCodeUsageCache 缓存 CommandCode 网关账号的用量数据（支持负缓存）
+type commandCodeUsageCache struct {
+	usage     *UsageInfo
+	err       error // 非 nil 表示缓存的错误（负缓存）
+	timestamp time.Time
+}
+
 const (
 	apiCacheTTL         = 3 * time.Minute
 	apiErrorCacheTTL    = 1 * time.Minute        // 负缓存 TTL：429 等错误缓存 1 分钟
@@ -128,9 +135,11 @@ type UsageCache struct {
 	windowStatsCache  sync.Map           // accountID -> *windowStatsCache
 	antigravityCache  sync.Map           // accountID -> *antigravityUsageCache
 	openCodeCache     sync.Map           // accountID -> *openCodeUsageCache
+	commandCodeCache  sync.Map           // accountID -> *commandCodeUsageCache
 	apiFlight         singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
 	antigravityFlight singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
 	openCodeFlight    singleflight.Group // 防止同一 OpenCode Go 账号的并发请求击穿缓存
+	commandCodeFlight singleflight.Group // 防止同一 CommandCode 账号的并发请求击穿缓存
 	openAIProbeCache  sync.Map           // accountID -> time.Time
 	grokProbeCache    sync.Map           // accountID -> last billing probe attempt
 }
@@ -312,6 +321,9 @@ type AccountUsageService struct {
 	tlsFPProfileService     *TLSFingerprintProfileService
 	agentIdentityTaskMu     sync.Mutex
 	agentIdentityWS         agentIdentityWSConnectionInvalidator
+	// allowCommandCodePrivateHosts 仅供测试注入 httptest 回环地址使用；
+	// 生产恒为 false（CommandCode 用量拉取保持 DNS Rebinding 校验）。
+	allowCommandCodePrivateHosts bool
 }
 
 // NewAccountUsageService 创建AccountUsageService实例
@@ -372,6 +384,17 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 	// 因此放在平台分发之前拦截。
 	if account.IsOpenCodeGo() {
 		usage, err := s.getOpenCodeGoUsage(ctx, account, forceProbe)
+		if err == nil {
+			s.tryClearRecoverableAccountError(ctx, account)
+		}
+		return usage, err
+	}
+
+	// CommandCode 网关账号（base_url 指向 api.commandcode.ai）：平台仍是
+	// openai / anthropic，但官方额度来自协议无关的 GET /alpha/billing/credits
+	// （Bearer API Key），因此放在平台分发之前拦截。
+	if account.IsCommandCode() {
+		usage, err := s.getCommandCodeUsage(ctx, account, forceProbe)
 		if err == nil {
 			s.tryClearRecoverableAccountError(ctx, account)
 		}
@@ -581,9 +604,9 @@ func (s *AccountUsageService) GetUsageBatch(ctx context.Context, accountIDs []in
 		g.Go(func() error {
 			var usage *UsageInfo
 			var usageErr error
-			// OpenCode Go 账号即使平台是 anthropic 也必须走主动链路：
-			// 其用量来自 /v1/usage，Extra 中没有 Anthropic 被动采样数据。
-			if supportsAnthropicPassiveUsage(account) && !account.IsOpenCodeGo() {
+			// OpenCode Go / CommandCode 网关账号即使平台是 anthropic 也必须走主动
+			// 链路：其用量来自官方用量端点，Extra 中没有 Anthropic 被动采样数据。
+			if supportsAnthropicPassiveUsage(account) && !account.IsOpenCodeGo() && !account.IsCommandCode() {
 				usage, usageErr = s.getPassiveUsageForAccount(gctx, account)
 			} else {
 				usage, usageErr = s.getUsageForAccount(gctx, account, force)

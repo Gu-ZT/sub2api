@@ -1,7 +1,8 @@
 <template>
   <div ref="rootRef" v-if="showUsageWindows">
-    <!-- OpenCode Zen Go gateway accounts (custom base_url): official /v1/usage windows -->
-    <template v-if="isOpenCodeGoCell">
+    <!-- OpenCode Zen Go / CommandCode gateway accounts (custom base_url):
+         official usage endpoints (OpenCode /v1/usage, CommandCode /alpha/billing/credits) -->
+    <template v-if="isGatewayUsageCell">
       <!-- Loading state -->
       <div v-if="loading" class="space-y-1.5">
         <div v-for="i in 3" :key="i" class="flex items-center gap-1">
@@ -17,11 +18,11 @@
       </div>
 
       <!-- Usage data: 5h rolling / weekly / monthly windows, hover shows reset time -->
-      <div v-else-if="hasOpenCodeWindows && usageInfo" class="space-y-1">
+      <div v-else-if="hasGatewayWindows && usageInfo" class="space-y-1">
         <UsageProgressBar
           v-if="usageInfo.five_hour"
           label="5h"
-          :title="openCodeResetTitle(usageInfo.five_hour.resets_at)"
+          :title="gatewayResetTitle(usageInfo.five_hour.resets_at)"
           :utilization="usageInfo.five_hour.utilization"
           :resets-at="usageInfo.five_hour.resets_at"
           color="indigo"
@@ -29,7 +30,7 @@
         <UsageProgressBar
           v-if="usageInfo.seven_day"
           label="7d"
-          :title="openCodeResetTitle(usageInfo.seven_day.resets_at)"
+          :title="gatewayResetTitle(usageInfo.seven_day.resets_at)"
           :utilization="usageInfo.seven_day.utilization"
           :resets-at="usageInfo.seven_day.resets_at"
           color="emerald"
@@ -37,7 +38,7 @@
         <UsageProgressBar
           v-if="usageInfo.thirty_day"
           label="30d"
-          :title="openCodeResetTitle(usageInfo.thirty_day.resets_at)"
+          :title="gatewayResetTitle(usageInfo.thirty_day.resets_at)"
           :utilization="usageInfo.thirty_day.utilization"
           :resets-at="usageInfo.thirty_day.resets_at"
           color="purple"
@@ -747,13 +748,16 @@ import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
 import CNProviderBalanceCell from './CNProviderBalanceCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
-import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn, isOpenCodeGoAccount } from './credentialsBuilder'
+import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn, isOpenCodeGoAccount, isCommandCodeAccount } from './credentialsBuilder'
 
 // Module-level cache shared across all AccountUsageCell instances
 const _usageCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
 const USAGE_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 // How long a quota-reset response may suppress the row-patch usage refetch.
 const SUPPRESS_USAGE_REFRESH_WINDOW_MS = 5 * 1000
+// Gateway usage cells (OpenCode / CommandCode): polling base interval 60s ± 15s jitter.
+const GATEWAY_POLL_BASE_MS = 60 * 1000
+const GATEWAY_POLL_JITTER_MS = 15 * 1000
 
 const props = withDefaults(
   defineProps<{
@@ -811,11 +815,17 @@ let visibilityObserver: IntersectionObserver | null = null
 // OpenCode Zen Go 网关账号（base_url 指向 opencode.ai/zen/go，任意平台/类型）
 const isOpenCodeGoCell = computed(() => isOpenCodeGoAccount(props.account))
 
+// CommandCode 网关账号（base_url 指向 api.commandcode.ai，任意平台/类型）
+const isCommandCodeCell = computed(() => isCommandCodeAccount(props.account))
+
+// 网关用量自动查询账号（OpenCode / CommandCode）：访问页面自动查询 + 周期轮询
+const isGatewayUsageCell = computed(() => isOpenCodeGoCell.value || isCommandCodeCell.value)
+
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
-  // OpenCode Zen Go 网关账号（base_url 指向 opencode.ai/zen/go）：
-  // 官方 /v1/usage 提供滚动用量窗口，与平台/账号类型无关。
-  if (isOpenCodeGoCell.value) return true
+  // OpenCode Zen Go / CommandCode 网关账号（自定义 base_url）：
+  // 官方用量端点提供滚动窗口/余额，与平台/账号类型无关。
+  if (isOpenCodeGoCell.value || isCommandCodeCell.value) return true
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
   if (props.account.platform === 'gemini') return true
   // CN providers: apikey 账号也有滚动用量窗口（coding plan）或余额（payg），
@@ -831,7 +841,7 @@ const showUsageWindows = computed(() => {
 })
 
 const shouldFetchUsage = computed(() => {
-  if (isOpenCodeGoCell.value) return true
+  if (isOpenCodeGoCell.value || isCommandCodeCell.value) return true
   if (props.account.platform === 'anthropic') {
     return props.account.type === 'oauth' || props.account.type === 'setup-token'
   }
@@ -881,17 +891,17 @@ const hasOpenAIUsageFallback = computed(() => {
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
 })
 
-// OpenCode Go：任一窗口有数据即渲染（后端按窗口有无数据返回 null）
-const hasOpenCodeWindows = computed(() => {
+// OpenCode Go / CommandCode：任一窗口有数据即渲染（后端按窗口有无数据返回 null）
+const hasGatewayWindows = computed(() => {
   return !!usageInfo.value && !!(usageInfo.value.five_hour || usageInfo.value.seven_day || usageInfo.value.thirty_day)
 })
 
-// OpenCode Go：悬浮提示展示窗口重置时间（本地化绝对时间）
-const openCodeResetTitle = (resetsAt?: string | null): string => {
-  if (!resetsAt) return t('admin.accounts.usageWindow.openCodeResetUnknown')
+// OpenCode Go / CommandCode：悬浮提示展示窗口重置时间（本地化绝对时间）
+const gatewayResetTitle = (resetsAt?: string | null): string => {
+  if (!resetsAt) return t('admin.accounts.usageWindow.gatewayResetUnknown')
   const date = new Date(resetsAt)
-  if (Number.isNaN(date.getTime())) return t('admin.accounts.usageWindow.openCodeResetUnknown')
-  return t('admin.accounts.usageWindow.openCodeResetAt', { time: date.toLocaleString() })
+  if (Number.isNaN(date.getTime())) return t('admin.accounts.usageWindow.gatewayResetUnknown')
+  return t('admin.accounts.usageWindow.gatewayResetAt', { time: date.toLocaleString() })
 }
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))
@@ -1516,6 +1526,10 @@ const flushPendingAutoLoad = () => {
   loadUsage({ source }).catch((e) => {
     console.error('Failed to load deferred usage:', e)
   })
+  // 移动端进入视口后启动网关轮询（若此前因懒加载未启动）
+  if (isGatewayUsageCell.value) {
+    scheduleGatewayPoll()
+  }
 }
 
 const requestAutoLoad = (source?: 'passive' | 'active') => {
@@ -1528,6 +1542,40 @@ const requestAutoLoad = (source?: 'passive' | 'active') => {
   loadUsage({ source }).catch((e) => {
     console.error('Failed to auto load usage:', e)
   })
+}
+
+// ===== Gateway usage polling (OpenCode / CommandCode) =====
+// 访问页面即自动查询一次，之后每 60±15s 轮询（主动查询绕过前端缓存，
+// 但后端仍有 3 分钟成功缓存 / 1 分钟负缓存兜底防击穿）。
+let gatewayPollTimer: ReturnType<typeof setTimeout> | null = null
+
+const gatewayPollDelay = (): number => {
+  const jitter = Math.floor(Math.random() * (2 * GATEWAY_POLL_JITTER_MS + 1)) - GATEWAY_POLL_JITTER_MS
+  return GATEWAY_POLL_BASE_MS + jitter
+}
+
+const scheduleGatewayPoll = () => {
+  stopGatewayPoll()
+  if (!isGatewayUsageCell.value) return
+  // 移动端懒加载：单元格未进入视口时不轮询（进入视口由 flushPendingAutoLoad 启动）
+  if (shouldLazyLoadOnMobile.value && !hasEnteredViewport.value) return
+  gatewayPollTimer = setTimeout(() => {
+    gatewayPollTimer = null
+    if (!unmounted.value && isGatewayUsageCell.value) {
+      // 主动查询绕过前端 5 分钟缓存，确保页面停留期间额度持续刷新
+      loadUsage({ source: 'active', bypassCache: true }).catch((e) => {
+        console.error('Failed to poll gateway usage:', e)
+      })
+    }
+    scheduleGatewayPoll()
+  }, gatewayPollDelay())
+}
+
+const stopGatewayPoll = () => {
+  if (gatewayPollTimer !== null) {
+    clearTimeout(gatewayPollTimer)
+    gatewayPollTimer = null
+  }
 }
 
 const detachVisibilityObserver = () => {
@@ -1698,6 +1746,12 @@ onMounted(() => {
   if (!shouldAutoLoadUsageOnMount.value) return
   const source = isAnthropicOAuthOrSetupToken.value ? 'passive' : undefined
   requestAutoLoad(source)
+
+  // 网关用量账号（OpenCode / CommandCode）：挂载即自动查询，
+  // 并启动 60±15s 轮询持续刷新额度。
+  if (isGatewayUsageCell.value) {
+    scheduleGatewayPoll()
+  }
 })
 
 watch(
@@ -1792,6 +1846,7 @@ watch(isDesktopViewport, (isDesktop) => {
 })
 
 onUnmounted(() => {
+  stopGatewayPoll()
   detachVisibilityObserver()
   if (desktopViewportMediaQuery && desktopViewportListener) {
     if (typeof desktopViewportMediaQuery.removeEventListener === 'function') {

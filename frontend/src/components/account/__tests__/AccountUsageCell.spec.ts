@@ -1441,4 +1441,161 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).not.toContain('7d S')
     expect(wrapper.text()).not.toContain('7d F')
   })
+
+  it('CommandCode 网关账号挂载时自动查询用量并渲染窗口', async () => {
+    getUsage.mockResolvedValue({
+      five_hour: {
+        utilization: 42,
+        resets_at: '2026-07-03T10:00:00Z',
+        remaining_seconds: 3600
+      },
+      seven_day: {
+        utilization: 10,
+        resets_at: '2026-07-06T22:00:00Z',
+        remaining_seconds: 300000
+      },
+      thirty_day: {
+        utilization: 82,
+        resets_at: null,
+        remaining_seconds: 0
+      }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 4001,
+          platform: 'openai',
+          type: 'apikey',
+          credentials: {
+            api_key: 'sk-test',
+            base_url: 'https://api.commandcode.ai/provider/v1'
+          },
+          extra: {}
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt', 'color'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
+          },
+          AccountQuotaInfo: true,
+        }
+      }
+    })
+
+    await flushPromises()
+
+    // 挂载即自动查询（绕过被动/手动限制）
+    expect(getUsage).toHaveBeenCalledTimes(1)
+    expect(getUsage).toHaveBeenCalledWith(4001)
+    expect(wrapper.text()).toContain('5h|42')
+    expect(wrapper.text()).toContain('7d|10')
+    expect(wrapper.text()).toContain('30d|82')
+  })
+
+  it('OpenCode 网关账号挂载时自动查询用量并渲染窗口', async () => {
+    getUsage.mockResolvedValue({
+      five_hour: {
+        utilization: 21,
+        resets_at: '2026-07-03T10:00:00Z',
+        remaining_seconds: 3600
+      },
+      seven_day: {
+        utilization: 33,
+        resets_at: '2026-07-06T22:00:00Z',
+        remaining_seconds: 300000
+      }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 4002,
+          platform: 'anthropic',
+          type: 'apikey',
+          credentials: {
+            api_key: 'sk-test',
+            base_url: 'https://opencode.ai/zen/go'
+          },
+          extra: {}
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt', 'color'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
+          },
+          AccountQuotaInfo: true,
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(getUsage).toHaveBeenCalledTimes(1)
+    expect(getUsage).toHaveBeenCalledWith(4002)
+    expect(wrapper.text()).toContain('5h|21')
+    expect(wrapper.text()).toContain('7d|33')
+  })
+
+  it('网关账号挂载后按 60±15s 轮询刷新用量', async () => {
+    vi.useFakeTimers()
+    try {
+      getUsage.mockResolvedValue({
+        five_hour: {
+          utilization: 10,
+          resets_at: null,
+          remaining_seconds: 0
+        },
+        seven_day: {
+          utilization: 20,
+          resets_at: null,
+          remaining_seconds: 0
+        }
+      })
+
+      const wrapper = mount(AccountUsageCell, {
+        props: {
+          account: makeAccount({
+            id: 4003,
+            platform: 'openai',
+            type: 'apikey',
+            credentials: {
+              api_key: 'sk-test',
+              base_url: 'https://api.commandcode.ai/provider/v1'
+            },
+            extra: {}
+          })
+        },
+        global: {
+          stubs: {
+            UsageProgressBar: {
+              props: ['label', 'utilization', 'resetsAt', 'color'],
+              template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
+            },
+            AccountQuotaInfo: true,
+          }
+        }
+      })
+
+      await flushPromises()
+
+      // 挂载即自动查询一次
+      expect(getUsage).toHaveBeenCalledTimes(1)
+
+      // 推进 75s（> 60+15 上限）触发下一轮轮询
+      vi.advanceTimersByTime(75 * 1000)
+      await flushPromises()
+
+      // 轮询应再触发一次主动查询
+      expect(getUsage).toHaveBeenCalledTimes(2)
+
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

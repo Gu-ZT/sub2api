@@ -482,3 +482,43 @@ export function isOpenCodeGoAccount(account?: {
 } | null): boolean {
   return isOpenCodeGoBaseUrl(account?.credentials?.base_url)
 }
+
+// ===== CommandCode 网关账号识别 =====
+// 与后端 service/commandcode_usage_service.go 的 isCommandCodeBaseURL 保持一致：
+// base_url 指向 api.commandcode.ai 的账号（任意平台/类型）额度走官方
+// /alpha/billing/credits 端点，在账号列表「用量窗口」单元格渲染 5h / 7d / 月度。
+
+const COMMAND_CODE_HOSTS = new Set(['api.commandcode.ai'])
+
+/** 判断 base_url 字符串是否指向 api.commandcode.ai。 */
+export function isCommandCodeBaseUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
+  if (!COMMAND_CODE_HOSTS.has(parsed.hostname.toLowerCase())) return false
+  const path = parsed.pathname.toLowerCase().replace(/\/+$/, '')
+  return (
+    path === '' ||
+    path === '/' ||
+    path === '/provider' ||
+    path === '/provider/v1' ||
+    path.startsWith('/provider/v1/')
+  )
+}
+
+/**
+ * 判断账号是否为 CommandCode 网关账号（按 credentials.base_url 判定）。
+ * 凭证可能未下发或不含 base_url，缺省返回 false。
+ */
+export function isCommandCodeAccount(account?: {
+  credentials?: Record<string, unknown> | null
+} | null): boolean {
+  return isCommandCodeBaseUrl(account?.credentials?.base_url)
+}

@@ -466,7 +466,9 @@ export default {
         passiveSampled: '被动采样',
         activeQuery: '查询',
         openCodeResetAt: '重置于 {time}',
-        openCodeResetUnknown: '重置时间未知'
+        openCodeResetUnknown: '重置时间未知',
+        gatewayResetAt: '重置于 {time}',
+        gatewayResetUnknown: '重置时间未知'
       },
       openaiQuotaReset: {
         count: '次数',

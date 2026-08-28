@@ -1505,7 +1505,9 @@ export default {
         passiveSampled: 'Passive',
         activeQuery: 'Query',
         openCodeResetAt: 'Resets at {time}',
-        openCodeResetUnknown: 'Reset time unknown'
+        openCodeResetUnknown: 'Reset time unknown',
+        gatewayResetAt: 'Resets at {time}',
+        gatewayResetUnknown: 'Reset time unknown'
       },
       openaiQuotaReset: {
         count: 'Credits',
