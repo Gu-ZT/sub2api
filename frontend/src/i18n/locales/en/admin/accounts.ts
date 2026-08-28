@@ -1608,7 +1608,9 @@ export default {
         passiveSampled: 'Passive',
         activeQuery: 'Query',
         estimatedTotalCost: 'Est. total ${cost}',
-        estimatedTotalCostTooltip: 'Estimated total cost at 100% utilization, based on current window cost and utilization'
+        estimatedTotalCostTooltip: 'Estimated total cost at 100% utilization, based on current window cost and utilization',
+        gatewayResetAt: 'Resets at {time}',
+        gatewayResetUnknown: 'Reset time unknown'
       },
       openaiReferral: {
         available: 'Invites left',

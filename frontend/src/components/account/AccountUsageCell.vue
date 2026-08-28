@@ -1,5 +1,101 @@
 <template>
   <div ref="rootRef" v-if="showUsageWindows">
+    <!-- CommandCode 网关账号（自定义 base_url）：官方额度端点 /alpha/billing/credits -->
+    <template v-if="isGatewayUsageCell">
+      <!-- Loading state -->
+      <div v-if="loading" class="space-y-1.5">
+        <div v-for="i in 3" :key="i" class="flex items-center gap-1">
+          <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-1.5 w-8 animate-pulse rounded-full bg-gray-200 dark:bg-gray-700"></div>
+          <div class="h-3 w-[32px] animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+        </div>
+      </div>
+
+      <!-- Error state -->
+      <div v-else-if="error" class="text-xs text-red-500">
+        {{ error }}
+      </div>
+
+      <!-- Usage data: 5h rolling / weekly / monthly windows, hover shows reset time -->
+      <div v-else-if="hasGatewayWindows && usageInfo" class="space-y-1">
+        <UsageProgressBar
+          v-if="usageInfo.five_hour"
+          label="5h"
+          :title="gatewayResetTitle(usageInfo.five_hour.resets_at)"
+          :utilization="usageInfo.five_hour.utilization"
+          :resets-at="usageInfo.five_hour.resets_at"
+          color="indigo"
+        />
+        <UsageProgressBar
+          v-if="usageInfo.seven_day"
+          label="7d"
+          :title="gatewayResetTitle(usageInfo.seven_day.resets_at)"
+          :utilization="usageInfo.seven_day.utilization"
+          :resets-at="usageInfo.seven_day.resets_at"
+          color="emerald"
+        />
+        <UsageProgressBar
+          v-if="usageInfo.thirty_day"
+          label="30d"
+          :title="gatewayResetTitle(usageInfo.thirty_day.resets_at)"
+          :utilization="usageInfo.thirty_day.utilization"
+          :resets-at="usageInfo.thirty_day.resets_at"
+          color="purple"
+        />
+        <div class="flex items-center gap-1.5 mt-0.5">
+          <button
+            type="button"
+            class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="activeQueryLoading"
+            @click="loadActiveUsage"
+          >
+            <svg
+              class="h-2.5 w-2.5"
+              :class="{ 'animate-spin': activeQueryLoading }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            {{ t('admin.accounts.usageWindow.activeQuery') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- No data yet -->
+      <div v-else class="space-y-1">
+        <div class="text-xs text-gray-400">-</div>
+        <button
+          type="button"
+          class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="activeQueryLoading"
+          @click="loadActiveUsage"
+        >
+          <svg
+            class="h-2.5 w-2.5"
+            :class="{ 'animate-spin': activeQueryLoading }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
+          </svg>
+          {{ t('admin.accounts.usageWindow.activeQuery') }}
+        </button>
+      </div>
+    </template>
+
     <!-- Anthropic OAuth and Setup Token accounts: fetch real usage data -->
     <template
       v-if="
@@ -682,12 +778,15 @@ import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import CNProviderQuotaCell from './CNProviderQuotaCell.vue'
 import CNProviderBalanceCell from './CNProviderBalanceCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
-import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn } from './credentialsBuilder'
+import { cnQuotaCellVisible as cnQuotaCellVisibleFn, cnBalanceCellVisible as cnBalanceCellVisibleFn, isCommandCodeAccount } from './credentialsBuilder'
 import OpenCodeGoUsageCell from './OpenCodeGoUsageCell.vue'
 
 // Module-level cache shared across all AccountUsageCell instances
 const _usageCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
 const USAGE_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+// CommandCode 用量单元格：轮询基础间隔 60s ± 15s 抖动。
+const GATEWAY_POLL_BASE_MS = 60 * 1000
+const GATEWAY_POLL_JITTER_MS = 15 * 1000
 
 const props = withDefaults(
   defineProps<{
@@ -741,8 +840,17 @@ let desktopViewportMediaQuery: MediaQueryList | null = null
 let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = null
 let visibilityObserver: IntersectionObserver | null = null
 
+// CommandCode 网关账号（base_url 指向 api.commandcode.ai，任意平台/类型）
+const isCommandCodeCell = computed(() => isCommandCodeAccount(props.account))
+
+// 网关用量自动查询账号（CommandCode）：访问页面自动查询 + 周期轮询
+const isGatewayUsageCell = computed(() => isCommandCodeCell.value)
+
 // Show usage windows for OAuth and Setup Token accounts
 const showUsageWindows = computed(() => {
+  // CommandCode 网关账号（自定义 base_url）：
+  // 官方额度端点提供滚动窗口/余额，与平台/账号类型无关。
+  if (isCommandCodeCell.value) return true
   // Gemini: we can always compute local usage windows from DB logs (simulated quotas).
   if (props.account.platform === 'gemini') return true
   // CN providers: apikey 账号也有滚动用量窗口（coding plan）或余额（payg），
@@ -760,6 +868,7 @@ const showUsageWindows = computed(() => {
 })
 
 const shouldFetchUsage = computed(() => {
+  if (isCommandCodeCell.value) return true
   if (props.account.platform === 'anthropic') {
     return props.account.type === 'oauth' || props.account.type === 'setup-token'
   }
@@ -827,6 +936,19 @@ const openAISevenDayEstimatedTotalCost = computed(() => {
   const estimate = (currentCost * 100) / utilization
   return Number.isFinite(estimate) && estimate > 0 ? estimate : null
 })
+
+// CommandCode：任一窗口有数据即渲染（后端按窗口有无数据返回 null）
+const hasGatewayWindows = computed(() => {
+  return !!usageInfo.value && !!(usageInfo.value.five_hour || usageInfo.value.seven_day || usageInfo.value.thirty_day)
+})
+
+// CommandCode：悬浮提示展示窗口重置时间（本地化绝对时间）
+const gatewayResetTitle = (resetsAt?: string | null): string => {
+  if (!resetsAt) return t('admin.accounts.usageWindow.gatewayResetUnknown')
+  const date = new Date(resetsAt)
+  if (Number.isNaN(date.getTime())) return t('admin.accounts.usageWindow.gatewayResetUnknown')
+  return t('admin.accounts.usageWindow.gatewayResetAt', { time: date.toLocaleString() })
+}
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))
 
@@ -1451,6 +1573,10 @@ const flushPendingAutoLoad = () => {
   loadUsage({ source }).catch((e) => {
     console.error('Failed to load deferred usage:', e)
   })
+  // 移动端进入视口后启动网关轮询（若此前因懒加载未启动）
+  if (isGatewayUsageCell.value) {
+    scheduleGatewayPoll()
+  }
 }
 
 const requestAutoLoad = (source?: 'passive' | 'active') => {
@@ -1463,6 +1589,40 @@ const requestAutoLoad = (source?: 'passive' | 'active') => {
   loadUsage({ source }).catch((e) => {
     console.error('Failed to auto load usage:', e)
   })
+}
+
+// ===== Gateway usage polling (OpenCode / CommandCode) =====
+// 访问页面即自动查询一次，之后每 60±15s 轮询（主动查询绕过前端缓存，
+// 但后端仍有 3 分钟成功缓存 / 1 分钟负缓存兜底防击穿）。
+let gatewayPollTimer: ReturnType<typeof setTimeout> | null = null
+
+const gatewayPollDelay = (): number => {
+  const jitter = Math.floor(Math.random() * (2 * GATEWAY_POLL_JITTER_MS + 1)) - GATEWAY_POLL_JITTER_MS
+  return GATEWAY_POLL_BASE_MS + jitter
+}
+
+const scheduleGatewayPoll = () => {
+  stopGatewayPoll()
+  if (!isGatewayUsageCell.value) return
+  // 移动端懒加载：单元格未进入视口时不轮询（进入视口由 flushPendingAutoLoad 启动）
+  if (shouldLazyLoadOnMobile.value && !hasEnteredViewport.value) return
+  gatewayPollTimer = setTimeout(() => {
+    gatewayPollTimer = null
+    if (!unmounted.value && isGatewayUsageCell.value) {
+      // 主动查询绕过前端 5 分钟缓存，确保页面停留期间额度持续刷新
+      loadUsage({ source: 'active', bypassCache: true }).catch((e) => {
+        console.error('Failed to poll gateway usage:', e)
+      })
+    }
+    scheduleGatewayPoll()
+  }, gatewayPollDelay())
+}
+
+const stopGatewayPoll = () => {
+  if (gatewayPollTimer !== null) {
+    clearTimeout(gatewayPollTimer)
+    gatewayPollTimer = null
+  }
 }
 
 const detachVisibilityObserver = () => {
@@ -1632,6 +1792,12 @@ onMounted(() => {
   if (!shouldAutoLoadUsageOnMount.value) return
   const source = isAnthropicOAuthOrSetupToken.value ? 'passive' : undefined
   requestAutoLoad(source)
+
+  // 网关用量账号（OpenCode / CommandCode）：挂载即自动查询，
+  // 并启动 60±15s 轮询持续刷新额度。
+  if (isGatewayUsageCell.value) {
+    scheduleGatewayPoll()
+  }
 })
 
 watch(
@@ -1722,6 +1888,7 @@ watch(isDesktopViewport, (isDesktop) => {
 })
 
 onUnmounted(() => {
+  stopGatewayPoll()
   detachVisibilityObserver()
   if (desktopViewportMediaQuery && desktopViewportListener) {
     if (typeof desktopViewportMediaQuery.removeEventListener === 'function') {

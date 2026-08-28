@@ -526,7 +526,9 @@ export default {
         passiveSampled: '被动采样',
         activeQuery: '查询',
         estimatedTotalCost: '预计总费用 ${cost}',
-        estimatedTotalCostTooltip: '根据当前窗口费用和使用率估算达到 100% 使用率时的总费用'
+        estimatedTotalCostTooltip: '根据当前窗口费用和使用率估算达到 100% 使用率时的总费用',
+        gatewayResetAt: '重置于 {time}',
+        gatewayResetUnknown: '重置时间未知'
       },
       openaiReferral: {
         available: '可邀请',
