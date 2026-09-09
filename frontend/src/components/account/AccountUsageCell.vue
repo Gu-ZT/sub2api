@@ -896,7 +896,10 @@ const cnAccountMode = computed(() => {
 const cnQuotaCellVisible = computed(() => cnQuotaCellVisibleFn(props.account.platform, cnAccountMode.value))
 const cnBalanceCellVisible = computed(() => cnBalanceCellVisibleFn(props.account.platform, cnAccountMode.value))
 
-const isBatchManaged = computed(() => typeof props.requestBatchedUsage === 'function')
+// 网关用量账号（OpenCode / CommandCode）不参与父级批量托管：父级
+// accountSupportsBatchUsage 按平台过滤不含网关账号，且网关账号需要单元格
+// 自身的 60±15s 轮询；统一走自身加载路径（与移动端行为一致）。
+const isBatchManaged = computed(() => typeof props.requestBatchedUsage === 'function' && !isGatewayUsageCell.value)
 
 const showGeminiTodayStats = computed(() => {
   return props.account.platform === 'gemini' && props.account.type === 'service_account'
