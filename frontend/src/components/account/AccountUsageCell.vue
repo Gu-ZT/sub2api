@@ -913,7 +913,10 @@ const shouldFetchUsage = computed(() => {
 const cnQuotaCellVisible = computed(() => cnQuotaCellVisibleFn(props.account))
 const cnBalanceCellVisible = computed(() => cnBalanceCellVisibleFn(props.account))
 
-const isBatchManaged = computed(() => typeof props.requestBatchedUsage === 'function')
+// 网关用量账号（OpenCode / CommandCode）不参与父级批量托管：父级
+// accountSupportsBatchUsage 按平台过滤不含网关账号，且网关账号需要单元格
+// 自身的 60±15s 轮询；统一走自身加载路径（与移动端行为一致）。
+const isBatchManaged = computed(() => typeof props.requestBatchedUsage === 'function' && !isGatewayUsageCell.value)
 
 // Vertex 没有本地模拟配额，用量窗口展示今日统计
 const showGeminiTodayStats = computed(() => {
