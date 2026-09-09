@@ -377,6 +377,7 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 		usage, err := s.getCommandCodeUsage(ctx, account, forceProbe)
 		if err == nil {
 			s.tryClearRecoverableAccountError(ctx, account)
+			s.reconcileGatewayUsageCircuit(ctx, account, usage)
 		}
 		return usage, err
 	}

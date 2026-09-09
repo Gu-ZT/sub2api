@@ -393,6 +393,14 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 		}
 	}
 
+	// CommandCode 网关 credits 耗尽（400/402/429 "insufficient credits"）：
+	// 可恢复状态（充值后恢复），临时停调一个兜底周期并由用量轮询提前解除，
+	// 语义对齐国产供应商余额不足，不走下方 400 通用分支。
+	if account.IsCommandCode() && isGatewayInsufficientCreditsError(statusCode, responseBody) {
+		s.handleGatewayInsufficientCredits(ctx, account, extractUpstreamErrorMessage(responseBody))
+		return false
+	}
+
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(responseBody))
 	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 	if upstreamMsg != "" {
@@ -1240,6 +1248,21 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 
 	// 4. 如果响应头没有，尝试从响应体解析（OpenAI usage_limit_reached, Gemini）
 	if resetTimestamp == "" {
+		// 网关账号（OpenCode Go 原生平台 / CommandCode 自定义 base_url）：
+		// 其 429 响应体是 OpenAI 兼容格式（GoUsageLimitError / usage_limit_reached），
+		// 平台无关地解析，避免落入秒级兜底冷却。
+		if account.IsOpenCodeGo() || account.IsCommandCode() {
+			if resetAt := parseOpenAIRateLimitResetTime(responseBody); resetAt != nil {
+				resetTime := time.Unix(*resetAt, 0)
+				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
+				if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetTime); err != nil {
+					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+					return
+				}
+				slog.Info("gateway_account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
+				return
+			}
+		}
 		switch account.Platform {
 		case PlatformOpenAI:
 			// 尝试解析 OpenAI 的 usage_limit_reached 错误
