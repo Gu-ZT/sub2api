@@ -314,6 +314,56 @@ func TestGetCommandCodeUsage_FetchParseCache(t *testing.T) {
 	}
 }
 
+// TestGetCommandCodeUsage_SurvivesCallerCancellation 回归：上游拉取结果进入跨请求
+// 共享缓存，且 singleflight 多调用方共享同一次请求——任一调用方 ctx 取消（前端
+// 表格加载器 abort 被取代的请求）不得中断拉取，否则错误会被负缓存放大。
+func TestGetCommandCodeUsage_SurvivesCallerCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/credits") {
+			_, _ = w.Write([]byte(`{
+				"credits": {"monthlyCredits": 50},
+				"windowLimits": {"fiveHour": {"used": 10, "cap": 100}}
+			}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	originalUsage := commandCodeUsageURL
+	commandCodeUsageURL = srv.URL + "/credits"
+	defer func() { commandCodeUsageURL = originalUsage }()
+	originalSubs := commandCodeSubscriptionsURL
+	commandCodeSubscriptionsURL = srv.URL + "/subscriptions"
+	defer func() { commandCodeSubscriptionsURL = originalSubs }()
+
+	acc := &Account{
+		ID:       92004,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "sk-test-123",
+			"base_url": "https://api.commandcode.ai/provider/v1",
+		},
+	}
+	svc := &AccountUsageService{
+		cache:                        NewUsageCache(),
+		allowCommandCodePrivateHosts: true,
+	}
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	usage, err := svc.getCommandCodeUsage(canceledCtx, acc, false)
+	if err != nil {
+		t.Fatalf("getCommandCodeUsage() with canceled ctx error = %v", err)
+	}
+	if usage.FiveHour == nil || usage.FiveHour.Utilization != 10.0 {
+		t.Fatalf("five_hour = %#v", usage.FiveHour)
+	}
+}
+
 func TestGetCommandCodeUsage_AuthErrorNegativeCache(t *testing.T) {
 	var hitCount int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

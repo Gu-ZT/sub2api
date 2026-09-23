@@ -158,6 +158,12 @@ type commandCodeSubscriptionsResponse struct {
 func (s *AccountUsageService) getCommandCodeUsage(ctx context.Context, account *Account, force bool) (*UsageInfo, error) {
 	accountID := account.ID
 
+	// 拉取结果进入跨请求共享缓存，且 singleflight 让多个调用方共享同一次
+	// 上游请求：任一客户端断开（前端表格加载器会 abort 被取代的请求）都不应
+	// 取消共享拉取，否则所有等待方收到 context canceled 并被负缓存放大。
+	// 上游超时由 fetchCommandCodeEndpoint 的 15s 超时独立约束。
+	ctx = context.WithoutCancel(ctx)
+
 	// 1. 检查缓存（成功响应 3 分钟 / 错误响应 1 分钟）
 	if !force {
 		if cached, ok := s.cache.commandCodeCache.Load(accountID); ok {
