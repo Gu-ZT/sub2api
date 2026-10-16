@@ -2012,4 +2012,109 @@ describe('AccountUsageCell', () => {
       vi.useRealTimers()
     }
   })
+
+  // ===== rebase 后融合回归：网关单元格与上游多协议 CN 子单元格不得同时渲染 =====
+  // 上游 platformCatalog 把 command_code 登记为一等平台（isMultiProtocolApiKeyPlatform
+  // 返回 true），而本分支按 base_url 宽判定把它也认作「网关账号」。若模板里网关分支与
+  // 下方分支链不是同一条链，官方 base_url 的 command_code 账号会同时命中两处，同一份
+  // /alpha/billing/credits 数据被渲染两遍并触发两条探测链路。
+  it('官方 base_url 的 command_code 账号只走网关单元格，不叠加 CN 子单元格', async () => {
+    getUsage.mockResolvedValue({
+      five_hour: { utilization: 42, resets_at: '2026-07-03T10:00:00Z', remaining_seconds: 3600 },
+      seven_day: { utilization: 10, resets_at: '2026-07-06T22:00:00Z', remaining_seconds: 300000 }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 4101,
+          platform: 'command_code',
+          type: 'apikey',
+          credentials: {
+            api_key: 'user_test_key',
+            account_mode: 'payg',
+            base_url: 'https://api.commandcode.ai/provider/v1'
+          }
+        })
+      },
+      global: {
+        stubs: {
+          ...cnUsageCellStubs,
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt', 'color', 'title'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
+          },
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    // 网关窗口渲染
+    expect(wrapper.text()).toContain('5h|42')
+    expect(wrapper.text()).toContain('7d|10')
+    // 上游 CN 子单元格不得叠加（避免同源双份探测与重复展示）
+    expect(wrapper.find('[data-test="cn-quota-cell"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="cn-balance-cell"]').exists()).toBe(false)
+  })
+
+  it('自定义中转的 command_code 账号仍走上游 CN 单元格判定（不误入网关分支）', async () => {
+    getUsage.mockResolvedValue({})
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 4102,
+          platform: 'command_code',
+          type: 'apikey',
+          credentials: { api_key: 'user_test_key', account_mode: 'payg', base_url: 'https://relay.example.com/v1' }
+        })
+      },
+      global: {
+        stubs: { ...cnUsageCellStubs, UsageProgressBar: true, AccountQuotaInfo: true }
+      }
+    })
+
+    await flushPromises()
+
+    // base_url 非官方主机：不是网关账号，上游 CN 占位符逻辑保持原样
+    expect(getUsage).not.toHaveBeenCalled()
+    expect(wrapper.find('div[title="admin.accounts.cnProviders.noBalanceEndpoint"]').exists()).toBe(true)
+  })
+
+  it('网关账号不再叠加多余的 `-` 占位符（分支链互斥）', async () => {
+    getUsage.mockResolvedValue({
+      five_hour: { utilization: 42, resets_at: null, remaining_seconds: 0 },
+      seven_day: { utilization: 10, resets_at: null, remaining_seconds: 0 },
+      thirty_day: { utilization: 82, resets_at: null, remaining_seconds: 0 }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 4103,
+          platform: 'openai',
+          type: 'apikey',
+          credentials: { api_key: 'sk-test', base_url: 'https://api.commandcode.ai/provider/v1' }
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization', 'resetsAt', 'color'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
+          },
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('5h|42')
+    expect(wrapper.text()).toContain('7d|10')
+    expect(wrapper.text()).toContain('30d|82')
+    expect(wrapper.text()).not.toContain('-')
+  })
 })

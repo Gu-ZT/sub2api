@@ -97,8 +97,12 @@
     </template>
 
     <!-- Anthropic OAuth and Setup Token accounts: fetch real usage data -->
+    <!-- 注意：这里是上面「网关用量」分支的 else-if，与下方 anthropic/openai/
+         antigravity/grok/多协议/gemini/其他 共同构成**唯一一条**分支链。
+         若此处改回独立 v-if，网关账号会同时命中本链（多协议分支里的 CN 子单元格）
+         与上方网关分支，同一份 /alpha/billing/credits 数据被渲染两次。 -->
     <template
-      v-if="
+      v-else-if="
         account.platform === 'anthropic' &&
         (account.type === 'oauth' || account.type === 'setup-token')
       "
