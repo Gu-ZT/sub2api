@@ -398,7 +398,10 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	// CommandCode 网关 credits 耗尽（400/402/429 "insufficient credits"）：
 	// 可恢复状态（充值后恢复），临时停调一个兜底周期并由用量轮询提前解除，
 	// 语义对齐国产供应商余额不足，不走下方 400 通用分支。
-	if account.IsCommandCode() && isGatewayInsufficientCreditsError(statusCode, responseBody) {
+	// 用本分支宽判定：上游 IsCommandCode() 只按 Platform == PlatformCommandCode
+	// 判定，覆盖不到「平台仍是 openai/anthropic 但 base_url 指向官方网关」的账号，
+	// 而本分支处理的正是这类网关账号。
+	if isCommandCodeGatewayAccount(account) && isGatewayInsufficientCreditsError(statusCode, responseBody) {
 		s.handleGatewayInsufficientCredits(ctx, account, extractUpstreamErrorMessage(responseBody))
 		return false
 	}
@@ -1276,7 +1279,9 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		// 网关账号（OpenCode Go 原生平台 / CommandCode 自定义 base_url）：
 		// 其 429 响应体是 OpenAI 兼容格式（GoUsageLimitError / usage_limit_reached），
 		// 平台无关地解析，避免落入秒级兜底冷却。
-		if account.IsOpenCodeGo() || account.IsCommandCode() {
+		// CommandCode 侧用本分支宽判定（base_url 指向官方网关），上游
+		// IsCommandCode() 只按平台判定，覆盖不到这里的自定义 base_url 账号。
+		if account.IsOpenCodeGo() || isCommandCodeGatewayAccount(account) {
 			if resetAt := parseOpenAIRateLimitResetTime(responseBody); resetAt != nil {
 				resetTime := time.Unix(*resetAt, 0)
 				s.notifyAccountSchedulingBlocked(account, resetTime, "429")

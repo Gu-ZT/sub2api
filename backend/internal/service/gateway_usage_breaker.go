@@ -70,7 +70,9 @@ func gatewayWindowExhaustedReset(account *Account, usage *UsageInfo, now time.Ti
 		resetAt := *p.ResetsAt
 		// CommandCode 30d 窗口由余额推导：充值即恢复，收敛到短冷却，
 		// 避免把账号冻结到计费周期末（可能长达数周）。
-		if w.monthly && account != nil && account.IsCommandCode() {
+		// 用本分支宽判定：上游 IsCommandCode() 只按 Platform == PlatformCommandCode
+		// 判定，覆盖不到「平台仍是 openai/anthropic 但 base_url 指向官方网关」的账号。
+		if w.monthly && account != nil && isCommandCodeGatewayAccount(account) {
 			if capped := now.Add(gatewayCreditsLowCooldown); capped.Before(resetAt) {
 				resetAt = capped
 			}
@@ -89,7 +91,9 @@ func (s *AccountUsageService) reconcileGatewayUsageCircuit(ctx context.Context, 
 	if s == nil || s.accountRepo == nil || account == nil || usage == nil {
 		return
 	}
-	if !account.IsCommandCode() {
+	// 用本分支宽判定（base_url 指向官方网关的账号也算），上游 IsCommandCode()
+	// 只按 Platform == PlatformCommandCode 判定，覆盖不到本机制的适用对象。
+	if !isCommandCodeGatewayAccount(account) {
 		return
 	}
 	now := time.Now()
