@@ -41,7 +41,14 @@ func (r *gatewayBreakerRepoStub) ClearTempUnschedulable(_ context.Context, _ int
 	return nil
 }
 
-func commandCodeTestAccount() *Account {
+// commandCodeGatewayTestAccount 构造本分支「网关账号」形态：平台仍是 openai，
+// 仅以 base_url 指向官方 api.commandcode.ai 标识（正是宽判定
+// isCommandCodeGatewayAccount 与上游窄判定 IsCommandCode() 的分界形态）。
+//
+// 命名避开上游 command_code_test.go 的 commandCodeTestAccount(id int64)
+// （带 //go:build unit 守卫，返回 PlatformCommandCode 账号）：本文件无 build tag，
+// 两者在 -tags=unit 下会同时参与编译，同名即重复声明。
+func commandCodeGatewayTestAccount() *Account {
 	return &Account{
 		ID:          9002,
 		Platform:    PlatformOpenAI,
@@ -60,18 +67,18 @@ func TestGatewayWindowExhaustedReset(t *testing.T) {
 	now := time.Now()
 
 	t.Run("no usage", func(t *testing.T) {
-		require.Nil(t, gatewayWindowExhaustedReset(commandCodeTestAccount(), nil, now))
+		require.Nil(t, gatewayWindowExhaustedReset(commandCodeGatewayTestAccount(), nil, now))
 	})
 
 	t.Run("below threshold", func(t *testing.T) {
 		usage := &UsageInfo{FiveHour: &UsageProgress{Utilization: 99.9, ResetsAt: timePtrFuture(time.Hour)}}
-		require.Nil(t, gatewayWindowExhaustedReset(commandCodeTestAccount(), usage, now))
+		require.Nil(t, gatewayWindowExhaustedReset(commandCodeGatewayTestAccount(), usage, now))
 	})
 
 	t.Run("expired reset ignored", func(t *testing.T) {
 		past := now.Add(-time.Minute)
 		usage := &UsageInfo{FiveHour: &UsageProgress{Utilization: 100, ResetsAt: &past}}
-		require.Nil(t, gatewayWindowExhaustedReset(commandCodeTestAccount(), usage, now))
+		require.Nil(t, gatewayWindowExhaustedReset(commandCodeGatewayTestAccount(), usage, now))
 	})
 
 	t.Run("picks latest exhausted window", func(t *testing.T) {
@@ -80,7 +87,7 @@ func TestGatewayWindowExhaustedReset(t *testing.T) {
 			SevenDay:  &UsageProgress{Utilization: 100, ResetsAt: timePtrFuture(3 * 24 * time.Hour)},
 			ThirtyDay: &UsageProgress{Utilization: 40, ResetsAt: timePtrFuture(10 * 24 * time.Hour)},
 		}
-		got := gatewayWindowExhaustedReset(commandCodeTestAccount(), usage, now)
+		got := gatewayWindowExhaustedReset(commandCodeGatewayTestAccount(), usage, now)
 		require.NotNil(t, got)
 		require.WithinDuration(t, now.Add(3*24*time.Hour), *got, time.Second)
 	})
@@ -89,7 +96,7 @@ func TestGatewayWindowExhaustedReset(t *testing.T) {
 		usage := &UsageInfo{
 			ThirtyDay: &UsageProgress{Utilization: 100, ResetsAt: timePtrFuture(20 * 24 * time.Hour)},
 		}
-		got := gatewayWindowExhaustedReset(commandCodeTestAccount(), usage, now)
+		got := gatewayWindowExhaustedReset(commandCodeGatewayTestAccount(), usage, now)
 		require.NotNil(t, got)
 		require.WithinDuration(t, now.Add(gatewayCreditsLowCooldown), *got, time.Second)
 	})
@@ -98,7 +105,7 @@ func TestGatewayWindowExhaustedReset(t *testing.T) {
 		usage := &UsageInfo{
 			ThirtyDay: &UsageProgress{Utilization: 100, ResetsAt: timePtrFuture(5 * time.Minute)},
 		}
-		got := gatewayWindowExhaustedReset(commandCodeTestAccount(), usage, now)
+		got := gatewayWindowExhaustedReset(commandCodeGatewayTestAccount(), usage, now)
 		require.NotNil(t, got)
 		require.WithinDuration(t, now.Add(5*time.Minute), *got, time.Second)
 	})
@@ -110,7 +117,7 @@ func TestReconcileGatewayUsageCircuit(t *testing.T) {
 	t.Run("blocks on exhausted window", func(t *testing.T) {
 		repo := &gatewayBreakerRepoStub{}
 		svc := &AccountUsageService{accountRepo: repo}
-		account := commandCodeTestAccount()
+		account := commandCodeGatewayTestAccount()
 		usage := &UsageInfo{FiveHour: &UsageProgress{Utilization: 100, ResetsAt: timePtrFuture(2 * time.Hour)}}
 
 		svc.reconcileGatewayUsageCircuit(context.Background(), account, usage)
@@ -123,7 +130,7 @@ func TestReconcileGatewayUsageCircuit(t *testing.T) {
 	t.Run("skips write when existing cooldown already covers target", func(t *testing.T) {
 		repo := &gatewayBreakerRepoStub{}
 		svc := &AccountUsageService{accountRepo: repo}
-		account := commandCodeTestAccount()
+		account := commandCodeGatewayTestAccount()
 		account.RateLimitResetAt = timePtrFuture(3 * time.Hour)
 		usage := &UsageInfo{FiveHour: &UsageProgress{Utilization: 100, ResetsAt: timePtrFuture(2 * time.Hour)}}
 
@@ -135,7 +142,7 @@ func TestReconcileGatewayUsageCircuit(t *testing.T) {
 	t.Run("clears rate limit on recovery", func(t *testing.T) {
 		repo := &gatewayBreakerRepoStub{}
 		svc := &AccountUsageService{accountRepo: repo}
-		account := commandCodeTestAccount()
+		account := commandCodeGatewayTestAccount()
 		account.RateLimitResetAt = timePtrFuture(2 * time.Hour)
 		account.RateLimitedAt = timePtrFuture(-time.Hour)
 		usage := &UsageInfo{FiveHour: &UsageProgress{Utilization: 12, ResetsAt: timePtrFuture(2 * time.Hour)}}
@@ -150,7 +157,7 @@ func TestReconcileGatewayUsageCircuit(t *testing.T) {
 	t.Run("clears own credits temp unsched on recovery", func(t *testing.T) {
 		repo := &gatewayBreakerRepoStub{}
 		svc := &AccountUsageService{accountRepo: repo}
-		account := commandCodeTestAccount()
+		account := commandCodeGatewayTestAccount()
 		account.TempUnschedulableUntil = timePtrFuture(5 * time.Minute)
 		account.TempUnschedulableReason = gatewayCreditsLowReasonPrefix + ": insufficient credits"
 		usage := &UsageInfo{ThirtyDay: &UsageProgress{Utilization: 20, ResetsAt: timePtrFuture(24 * time.Hour)}}
@@ -165,7 +172,7 @@ func TestReconcileGatewayUsageCircuit(t *testing.T) {
 	t.Run("leaves foreign temp unsched reasons untouched", func(t *testing.T) {
 		repo := &gatewayBreakerRepoStub{}
 		svc := &AccountUsageService{accountRepo: repo}
-		account := commandCodeTestAccount()
+		account := commandCodeGatewayTestAccount()
 		account.TempUnschedulableUntil = timePtrFuture(5 * time.Minute)
 		account.TempUnschedulableReason = "maintenance"
 		usage := &UsageInfo{ThirtyDay: &UsageProgress{Utilization: 20, ResetsAt: timePtrFuture(24 * time.Hour)}}
@@ -208,7 +215,7 @@ func TestHandleUpstreamError_CommandCodeInsufficientCredits(t *testing.T) {
 	t.Run("commandcode account temp unschedulable", func(t *testing.T) {
 		repo := &gatewayBreakerRepoStub{}
 		svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
-		account := commandCodeTestAccount()
+		account := commandCodeGatewayTestAccount()
 
 		shouldDisable := svc.HandleUpstreamError(context.Background(), account, http.StatusBadRequest, http.Header{}, body)
 
@@ -223,7 +230,7 @@ func TestHandleUpstreamError_CommandCodeInsufficientCredits(t *testing.T) {
 		repo := &gatewayBreakerRepoStub{}
 		svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
 
-		shouldDisable := svc.HandleUpstreamError(context.Background(), commandCodeTestAccount(), http.StatusTooManyRequests, http.Header{}, body)
+		shouldDisable := svc.HandleUpstreamError(context.Background(), commandCodeGatewayTestAccount(), http.StatusTooManyRequests, http.Header{}, body)
 
 		require.False(t, shouldDisable)
 		require.Len(t, repo.tempUnschedUntil, 1)
