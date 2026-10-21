@@ -799,7 +799,7 @@ export interface CreateApiKeyRequest {
 export interface UpdateApiKeyRequest {
   name?: string
   group_id?: number | null
-  group_routes?: APIKeyGroupRoute[] // 多分组路由（nil 不修改，空数组清空）
+  group_routes?: APIKeyGroupRoute[] // 多分组路由（undefined 不修改，空数组 [] 清空）
   status?: 'active' | 'inactive'
   ip_whitelist?: string[]
   ip_blacklist?: string[]

@@ -1991,9 +1991,11 @@ const handleSubmit = async () => {
         rate_limit_1d: rateLimitData.rate_limit_1d,
         rate_limit_7d: rateLimitData.rate_limit_7d,
       }
-      if (formData.value.enable_multi_group) {
-        updates.group_routes = normalizedRoutes
-      }
+      // 多分组路由必须无条件提交：后端以 nil 表示「不修改」、空数组表示「清空」。
+      // 若仅在开启时赋值，关闭多分组时字段缺失（nil），后端会跳过 SetGroupRoutes，
+      // 关联表里的旧路由残留，重新打开弹窗又会被 enable_multi_group 回填成开启状态，
+      // 表现即「多分组关不掉」。
+      updates.group_routes = formData.value.enable_multi_group ? normalizedRoutes : []
       if (shouldSubmitEditStatus(selectedKey.value, formData.value.status)) {
         updates.status = formData.value.status
       }

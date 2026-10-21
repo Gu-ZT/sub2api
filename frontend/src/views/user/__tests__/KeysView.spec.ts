@@ -56,6 +56,8 @@ const messages: Record<string, string> = {
   'keys.status.inactive': 'Inactive',
   'keys.status.quota_exhausted': 'Quota exhausted',
   'keys.usage': 'Usage',
+  'keys.multiGroupRouting': 'Multi-group routing',
+  'keys.multiGroupRoutingHint': 'Route by priority',
 }
 
 vi.mock('@/api', () => ({
@@ -385,8 +387,83 @@ describe('user KeysView column settings', () => {
     wrapper.unmount()
   })
 
-  it('removes successful keys from the selection and refreshes the table', async () => {
-    listKeys.mockResolvedValue({
+  // 回归：多分组路由开关关闭时必须显式提交 group_routes: []。
+  // 后端以 nil（字段缺失）= 不修改、空数组 = 清空 区分语义；若关闭时省略该字段，
+  // 关联表旧路由不会被删除，重新打开弹窗又会把开关回填成开启，表现为「关不掉」。
+  describe('multi-group routing toggle on edit', () => {
+    const multiGroupKey = (): ApiKey => ({
+      ...createApiKey(),
+      id: 9,
+      group_id: 28,
+      group_routes: [{ group_id: 28, priority: 1 }],
+    })
+
+    const openEdit = async (key: ApiKey) => {
+      listKeys.mockResolvedValue({ items: [key], total: 1, page: 1, page_size: 20, pages: 1 })
+      updateKey.mockResolvedValue(key)
+      const wrapper = await mountView()
+      await getButtonByText(wrapper, 'common.edit').trigger('click')
+      return wrapper
+    }
+
+    // 开关按钮是 section 标题旁唯一没有 data-test 的裸 button。
+    const multiGroupToggle = (wrapper: VueWrapper) =>
+      wrapper.get('button.rounded-full')
+
+    const submitForm = async (wrapper: VueWrapper) => {
+      await wrapper.get('#key-form').trigger('submit')
+      await flushPromises()
+    }
+
+    it('以 group_routes 回填开关状态', async () => {
+      const wrapper = await openEdit(multiGroupKey())
+      expect(multiGroupToggle(wrapper).classes()).toContain('bg-primary-600')
+      wrapper.unmount()
+    })
+
+    it('关闭开关后提交 group_routes: []（而非省略字段）', async () => {
+      const wrapper = await openEdit(multiGroupKey())
+      await multiGroupToggle(wrapper).trigger('click')
+      await nextTick()
+      await submitForm(wrapper)
+
+      expect(updateKey).toHaveBeenCalledOnce()
+      const payload = updateKey.mock.calls[0][1] as Record<string, unknown>
+      expect(payload).toHaveProperty('group_routes')
+      expect(payload.group_routes).toEqual([])
+      wrapper.unmount()
+    })
+
+    it('保持开关开启时提交规范化后的路由', async () => {
+      const key = {
+        ...multiGroupKey(),
+        group_routes: [
+          { group_id: 30, priority: 2 },
+          { group_id: 28, priority: 1 },
+        ],
+      } as ApiKey
+      const wrapper = await openEdit(key)
+      await submitForm(wrapper)
+
+      const payload = updateKey.mock.calls[0][1] as Record<string, unknown>
+      expect(payload.group_routes).toEqual([
+        { group_id: 28, priority: 1 },
+        { group_id: 30, priority: 2 },
+      ])
+      wrapper.unmount()
+    })
+
+    it('单分组密钥提交时同样显式带上空的 group_routes', async () => {
+      const wrapper = await openEdit({ ...createApiKey(), id: 9, group_id: 28 })
+      await submitForm(wrapper)
+
+      const payload = updateKey.mock.calls[0][1] as Record<string, unknown>
+      expect(payload.group_routes).toEqual([])
+      wrapper.unmount()
+    })
+  })
+
+  it('removes successful keys from the selection and refreshes the table', async () => {    listKeys.mockResolvedValue({
       items: [createApiKey(), { ...createApiKey(), id: 2, name: 'Second' }],
       total: 2, pages: 1
     })
