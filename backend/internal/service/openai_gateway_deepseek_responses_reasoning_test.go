@@ -429,6 +429,46 @@ func TestForwardResponses_DoesNotRetryUnrelatedBadRequest(t *testing.T) {
 	require.Len(t, upstream.bodies, 1, "无关 400 不得触发改写重试")
 }
 
+// TestForwardResponses_PassthroughRetriesAfterReasoningPassbackRejection 覆盖透传
+// 分支的 400 重试段：透传路径有自己独立的错误处理循环，与非透传那条不是同一段
+// 代码，必须单独证明它同样会改写并重发。
+func TestForwardResponses_PassthroughRetriesAfterReasoningPassbackRejection(t *testing.T) {
+	body := []byte(`{"model":"deepseek-v4-flash","store":false,"input":[` +
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"a"}]},` +
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"b"}]},` +
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"继续"}]}]}`)
+	c := newDeepSeekResponsesHistoryContext(t, body)
+	rejection := `{"error":{"code":"server_error","message":"Upstream request failed: [invalid_request_error] The ` + "`reasoning_content`" + ` in the thinking mode must be passed back to the API. (request_id: 098026a4-23da-4401-bdde-2eb3152d6295)"}}`
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       nopCloserString(rejection),
+		},
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_pass_retry"}},
+			Body:       nopCloserString(deepSeekResponsesOKBody()),
+		},
+	}}
+	account := openaiPlatformDeepSeekAccount()
+	account.Extra = map[string]any{
+		openai_compat.ExtraKeyResponsesMode: string(openai_compat.ResponsesSupportModeForceResponses),
+	}
+	account.Extra["openai_passthrough"] = true
+	svc := &OpenAIGatewayService{
+		cfg:          deepSeekChatFallbackTestConfig(),
+		httpUpstream: upstream,
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err, "透传路径改写后重发应当成功")
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 2, "透传路径应重发一次")
+	require.Equal(t, "reasoning", gjson.GetBytes(upstream.bodies[1], "input.1.type").String(), "重发时补上了占位 reasoning item")
+	require.Equal(t, deepSeekResponsesReasoningPlaceholderText, gjson.GetBytes(upstream.bodies[1], "input.1.summary.0.text").String())
+}
+
 // TestNormalizeOpenAIResponsesCompatibilityBodyKeepsDeepSeekReasoning 验证 store=false
 // 归一化在 DeepSeek 系目标上不再删掉 reasoning item：restore 后它会补明文，但如果
 // item 先被归一化整条删掉，任何补明文都无从谈起。
