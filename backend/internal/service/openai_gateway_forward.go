@@ -1157,7 +1157,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			// DeepSeek thinking mode 的 reasoning 明文缺失是确定性拒绝：换号重试不会
 			// 生效，必须改写历史后重发（见 repairDeepSeekResponsesReasoningRejection）。
-			if retryBody, repaired := s.repairDeepSeekResponsesReasoningRejection(account, body, respBody); repaired &&
+			if retryBody, repaired := s.repairDeepSeekResponsesReasoningRejection(body, respBody); repaired &&
 				rejectedFieldRetryState.Allow(retryBody) {
 				body = retryBody
 				requestView = newOpenAIRequestView(body)

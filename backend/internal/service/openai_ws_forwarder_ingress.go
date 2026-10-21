@@ -1070,7 +1070,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					}
 					// DeepSeek thinking mode 的 reasoning 明文缺失是确定性拒绝：
 					// 改写历史后重发一次（见 repairDeepSeekResponsesReasoningRejection）。
-					if repairedBody, repaired := s.repairDeepSeekResponsesReasoningRejection(account, payload, upstreamMessage); repaired &&
+					if repairedBody, repaired := s.repairDeepSeekResponsesReasoningRejection(payload, upstreamMessage); repaired &&
 						rejectedFieldRetryState.Allow(repairedBody) {
 						logOpenAIWSModeInfo(
 							"ingress_ws_deepseek_reasoning_retry account_id=%d turn=%d conn_id=%s",

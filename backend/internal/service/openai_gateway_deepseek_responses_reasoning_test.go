@@ -217,13 +217,12 @@ func TestIsDeepSeekReasoningPassbackRejection(t *testing.T) {
 }
 
 func TestRepairDeepSeekResponsesReasoningRejection(t *testing.T) {
-	deepSeek := &Account{Platform: PlatformDeepseek, Type: AccountTypeAPIKey}
 	rejection := []byte(`{"error":{"code":"invalid_request_error","message":"The ` + "`reasoning_content`" + ` in the thinking mode must be passed back to the API"}}`)
 	svc := &OpenAIGatewayService{}
 
 	t.Run("补齐已有 reasoning item 的明文", func(t *testing.T) {
 		body := encryptedOnlyReasoningHistory()
-		repaired, changed := svc.repairDeepSeekResponsesReasoningRejection(deepSeek, body, rejection)
+		repaired, changed := svc.repairDeepSeekResponsesReasoningRejection(body, rejection)
 		require.True(t, changed)
 		require.Equal(t, deepSeekResponsesReasoningPlaceholderText, gjson.GetBytes(repaired, "input.0.summary.0.text").String())
 	})
@@ -232,7 +231,7 @@ func TestRepairDeepSeekResponsesReasoningRejection(t *testing.T) {
 		body := []byte(`{"model":"deepseek-v4-flash","input":[` +
 			`{"type":"message","role":"user","content":[{"type":"input_text","text":"a"}]},` +
 			`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"b"}]}]}`)
-		repaired, changed := svc.repairDeepSeekResponsesReasoningRejection(deepSeek, body, rejection)
+		repaired, changed := svc.repairDeepSeekResponsesReasoningRejection(body, rejection)
 		require.True(t, changed)
 		require.Equal(t, "reasoning", gjson.GetBytes(repaired, "input.1.type").String())
 		require.Equal(t, deepSeekResponsesReasoningPlaceholderText, gjson.GetBytes(repaired, "input.1.summary.0.text").String())
@@ -244,7 +243,7 @@ func TestRepairDeepSeekResponsesReasoningRejection(t *testing.T) {
 		body := []byte(`{"model":"deepseek-v4-flash","input":[` +
 			`{"type":"reasoning","id":"rs_a","summary":[{"type":"summary_text","text":"t"}]},` +
 			`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"b"}]}]}`)
-		_, changed := svc.repairDeepSeekResponsesReasoningRejection(deepSeek, body, rejection)
+		_, changed := svc.repairDeepSeekResponsesReasoningRejection(body, rejection)
 		require.False(t, changed, "已是合规历史时不得改写")
 	})
 
@@ -266,15 +265,20 @@ func TestRepairDeepSeekResponsesReasoningRejection(t *testing.T) {
 		require.Equal(t, "c2", gjson.GetBytes(repaired, "input.3.call_id").String())
 	})
 
-	t.Run("非 DeepSeek 目标不改写", func(t *testing.T) {
+	t.Run("名单外的中转站只要回吐原文就修复", func(t *testing.T) {
+		// 用户实际遇到的是中转站把 DeepSeek 的 400 包成 server_error 后回吐，域名
+		// 不在 DeepSeek 名单里。报错原文本身才是契约存在的证据，不能因为主机没命中
+		// 判定就放弃修复。
 		body := encryptedOnlyReasoningHistory()
-		_, changed := svc.repairDeepSeekResponsesReasoningRejection(deepSeekPassbackPlainOpenAIAccount(), body, rejection)
-		require.False(t, changed)
+		wrapped := []byte(`{"error":{"code":"server_error","message":"Upstream request failed: [invalid_request_error] The ` + "`reasoning_content`" + ` in the thinking mode must be passed back to the API. (request_id: 098026a4-23da-4401-bdde-2eb3152d6295)"}}`)
+		repaired, changed := svc.repairDeepSeekResponsesReasoningRejection(body, wrapped)
+		require.True(t, changed)
+		require.Equal(t, deepSeekResponsesReasoningPlaceholderText, gjson.GetBytes(repaired, "input.0.summary.0.text").String())
 	})
 
 	t.Run("非这类 400 不改写", func(t *testing.T) {
 		body := encryptedOnlyReasoningHistory()
-		_, changed := svc.repairDeepSeekResponsesReasoningRejection(deepSeek, body, []byte(`{"error":{"message":"unknown parameter: foo"}}`))
+		_, changed := svc.repairDeepSeekResponsesReasoningRejection(body, []byte(`{"error":{"message":"unknown parameter: foo"}}`))
 		require.False(t, changed)
 	})
 }

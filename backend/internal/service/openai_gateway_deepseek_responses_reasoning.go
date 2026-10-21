@@ -40,6 +40,13 @@ func (s *OpenAIGatewayService) ensureDeepSeekResponsesReasoningPassback(account 
 	if !requiresDeepSeekReasoningPassback(account, body) {
 		return body
 	}
+	return s.injectDeepSeekResponsesReasoning(body)
+}
+
+// injectDeepSeekResponsesReasoning 是本文件补齐逻辑的无条件实现：调用方负责判断
+// 是否该动手。预防路径按目标主机判定，兜底路径按上游 400 原文判定——报错原文本身
+// 就是契约存在的证据，此时主机可能是不在名单里的中转站。
+func (s *OpenAIGatewayService) injectDeepSeekResponsesReasoning(body []byte) []byte {
 	input := parseRawJSONView(body).Get("input")
 	if !input.IsArray() {
 		return body
@@ -98,21 +105,20 @@ func isDeepSeekReasoningPassbackRejection(statusCode int, responseBody []byte) b
 // repairDeepSeekResponsesReasoningRejection 在命中「reasoning 明文必须回传」的
 // 400 后重写请求体，供调用方用既有重试预算重发一次。
 //
-// 先按 ensureDeepSeekResponsesReasoningPassback 补齐已有 reasoning item 的明文；
-// 若历史里一条 reasoning item 都不剩（被前置归一化删空，或客户端从未回传），再按
-// Chat Completions 侧 ensureDeepSeekChatReasoningPlaceholders 的同一策略，为每个
-// 缺 reasoning 的 assistant 轮次补一条占位 reasoning item。
+// 先补齐已有 reasoning item 的明文；若历史里一条 reasoning item 都不剩（被前置
+// 归一化删空，或客户端从未回传），再按 Chat Completions 侧
+// ensureDeepSeekChatReasoningPlaceholders 的同一策略，为每个缺 reasoning 的
+// assistant 轮次补一条占位 reasoning item。
 //
-// 非 DeepSeek 系目标一律不改写：真实 OpenAI 上游不认这种合成位置。
-func (s *OpenAIGatewayService) repairDeepSeekResponsesReasoningRejection(account *Account, body, responseBody []byte) ([]byte, bool) {
+// 判定只依赖 400 原文，不再要求目标主机命中 DeepSeek 名单：报错原文已经是上游存在
+// 这条契约的直接证据，而中转站、自建网关的域名五花八门，按名单判定会把用户真正
+// 遇到的场景漏掉。改写后仍然 400 时会由调用方的重试预算收敛，不会放大失败。
+func (s *OpenAIGatewayService) repairDeepSeekResponsesReasoningRejection(body, responseBody []byte) ([]byte, bool) {
 	if !isDeepSeekReasoningPassbackRejection(400, responseBody) {
 		return nil, false
 	}
-	if !requiresDeepSeekReasoningPassback(account, body) {
-		return nil, false
-	}
 
-	repaired := s.ensureDeepSeekResponsesReasoningPassback(account, body)
+	repaired := s.injectDeepSeekResponsesReasoning(body)
 	if !bytes.Equal(repaired, body) {
 		return repaired, true
 	}

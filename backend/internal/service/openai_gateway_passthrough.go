@@ -400,7 +400,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			}
 			// DeepSeek thinking mode 的 reasoning 明文缺失是确定性拒绝：改写历史后
 			// 重发一次（见 repairDeepSeekResponsesReasoningRejection）。
-			if retryBody, repaired := s.repairDeepSeekResponsesReasoningRejection(account, body, probeBody); repaired &&
+			if retryBody, repaired := s.repairDeepSeekResponsesReasoningRejection(body, probeBody); repaired &&
 				rejectedFieldRetryState.Allow(retryBody) {
 				body = retryBody
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying passthrough request after DeepSeek reasoning passback rejection (account: %s)", account.Name)
