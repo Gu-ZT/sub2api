@@ -144,3 +144,26 @@ func TestDeriveOpenAIForwardAttemptBody_SanitizationSticksAcrossBedrockRetries(t
 	require.Equal(t, 0, reasoningItemCount(t, nextAccount), "later Bedrock account must remain sanitized")
 	require.JSONEq(t, kiroReasoningCanonicalBody, string(canonical), "canonical forwardBody must never be mutated")
 }
+
+// TestDeriveOpenAIForwardAttemptBody_KeepsReasoningForDeepSeekTarget 证明跨模式
+// failover 落到 DeepSeek 系目标时不会删除 reasoning item：这类上游恰恰因为缺
+// reasoning 明文而 400，删干净等于把必然失败的请求发出去。
+func TestDeriveOpenAIForwardAttemptBody_KeepsReasoningForDeepSeekTarget(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	canonical := []byte(kiroReasoningCanonicalBody)
+
+	state := &openAIPassthroughFailoverState{}
+	_ = h.deriveOpenAIForwardAttemptBody(nil, canonical, newOpenAIPassthroughAccount(60, true), state)
+
+	for _, target := range []*service.Account{
+		{ID: 61, Platform: service.PlatformDeepseek, Type: service.AccountTypeAPIKey},
+		{
+			ID: 62, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+			Credentials: map[string]any{"base_url": "https://api.deepseek.com"},
+		},
+	} {
+		body := h.deriveOpenAIForwardAttemptBody(nil, canonical, target, state)
+		require.Equal(t, 1, reasoningItemCount(t, body), "DeepSeek 目标必须保留 reasoning item（account=%s）", target.Platform)
+		require.Equal(t, "ENC_BLOB", gjson.GetBytes(body, "input.1.encrypted_content").String())
+	}
+}

@@ -159,6 +159,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
 	}
 
+	// DeepSeek 系上游要求历史 reasoning 明文回传（见
+	// RequiresDeepSeekReasoningPassback）；store=false 归一化会删掉 reasoning
+	// item 或它的明文，恰好销毁这份契约，因此对这类目标跳过。
+	keepDeepSeekReasoningReplay := requiresDeepSeekReasoningPassback(account, body)
 	if account.IsOpenAIApiKey() {
 		if normalized, changed, normalizeErr := normalizeOpenAIParallelToolCallsWithoutTools(body, responsesLite); normalizeErr != nil {
 			return nil, normalizeErr
@@ -166,11 +170,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			body = normalized
 			originalBody = normalized
 		}
-		if normalized, changed, normalizeErr := normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body, isOpenAIResponsesCompactPath(c)); normalizeErr != nil {
-			return nil, normalizeErr
-		} else if changed {
-			body = normalized
-			originalBody = normalized
+		if !keepDeepSeekReasoningReplay {
+			if normalized, changed, normalizeErr := normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body, isOpenAIResponsesCompactPath(c)); normalizeErr != nil {
+				return nil, normalizeErr
+			} else if changed {
+				body = normalized
+				originalBody = normalized
+			}
 		}
 		requestView = newOpenAIRequestView(body)
 		reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
@@ -194,16 +200,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 	if account.IsOpenAI() && (account.IsOpenAIApiKey() || account.IsOpenAIOAuthLike()) {
-		normalizedReasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningContentReplay(body)
-		if reasoningErr != nil {
-			return nil, fmt.Errorf("normalize OpenAI Responses reasoning content replay: %w", reasoningErr)
-		}
-		if reasoningChanged {
-			body = normalizedReasoningBody
-			originalBody = normalizedReasoningBody
-			requestView = newOpenAIRequestView(normalizedReasoningBody)
-			reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
-			originalModel = reqModel
+		if !keepDeepSeekReasoningReplay {
+			normalizedReasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningContentReplay(body)
+			if reasoningErr != nil {
+				return nil, fmt.Errorf("normalize OpenAI Responses reasoning content replay: %w", reasoningErr)
+			}
+			if reasoningChanged {
+				body = normalizedReasoningBody
+				originalBody = normalizedReasoningBody
+				requestView = newOpenAIRequestView(normalizedReasoningBody)
+				reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
+				originalModel = reqModel
+			}
 		}
 		sanitizedBody, changed, sanitizeErr := sanitizeOpenAIResponsesInputItemIDs(body)
 		if sanitizeErr != nil {
@@ -1147,6 +1155,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying non-WSv2 request after %s (account: %s)", reason, account.Name)
 				continue
 			}
+			// DeepSeek thinking mode 的 reasoning 明文缺失是确定性拒绝：换号重试不会
+			// 生效，必须改写历史后重发（见 repairDeepSeekResponsesReasoningRejection）。
+			if retryBody, repaired := s.repairDeepSeekResponsesReasoningRejection(account, body, respBody); repaired &&
+				rejectedFieldRetryState.Allow(retryBody) {
+				body = retryBody
+				requestView = newOpenAIRequestView(body)
+				reqBody = nil
+				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying non-WSv2 request after DeepSeek reasoning passback rejection (account: %s)", account.Name)
+				continue
+			}
 			if retryBody, fallbackModel, retry := s.prepareOpenAICompactFallbackRetry(
 				c, account, requestedModel, body, resp.StatusCode, upstreamMsg, respBody, compactModelFallbackRetried,
 			); retry {
@@ -1405,6 +1423,11 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// DeepSeek / Kimi 原生 Responses 端点为无状态实现：强制 store=false、清除
 	// previous_response_id，避免携带状态字段被上游拒绝。
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
+	// DeepSeek thinking mode 要求历史 assistant 轮次回传 reasoning 明文，缺失时
+	// 上游 400 "The `reasoning_content` in the thinking mode must be passed back
+	// to the API"。Responses 出站此前没有对应处理（只有 Responses→CC 回退路径
+	// 有），这里对 DeepSeek 系目标补齐，真实 OpenAI 上游字节不变。
+	body = s.ensureDeepSeekResponsesReasoningPassback(account, body)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
 	if err != nil {

@@ -37,6 +37,19 @@ func (h *OpenAIGatewayHandler) deriveOpenAIForwardAttemptBody(
 	if !state.passthroughSeen {
 		return canonicalBody
 	}
+	// DeepSeek 系上游要求历史 reasoning 明文回传；删掉整条 reasoning item 会直接
+	// 造成 400 "The `reasoning_content` in the thinking mode must be passed back
+	// to the API"，因此这类目标保留 canonical body。
+	if service.RequiresDeepSeekReasoningPassbackForBody(account, canonicalBody) {
+		if reqLog != nil {
+			reqLog.Info("openai.failover_cross_mode_reasoning_kept",
+				zap.Int64("account_id", account.ID),
+				zap.Bool("account_passthrough", currentPassthrough),
+				zap.Bool("passthrough_seen", true),
+			)
+		}
+		return canonicalBody
+	}
 
 	sanitized, changed, err := service.SanitizeOpenAICrossModeFailoverReasoning(canonicalBody)
 	if err != nil {

@@ -599,6 +599,19 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			payloadBytes = len(body)
 			continue
 		}
+		// DeepSeek thinking mode 的 reasoning 明文缺失是确定性拒绝：改写历史后重发
+		// 一次（见 repairDeepSeekResponsesReasoningRejection）。
+		if repairedBody, repaired := s.repairDeepSeekResponsesReasoningRejection(account, body, respBody); repaired &&
+			rejectedFieldRetryState.Allow(repairedBody) {
+			logOpenAIWSModeInfo(
+				"ingress_ws_http_bridge_deepseek_reasoning_retry account_id=%d turn=%d",
+				account.ID,
+				turn,
+			)
+			body = repairedBody
+			payloadBytes = len(body)
+			continue
+		}
 
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 		if upstreamMsg == "" {

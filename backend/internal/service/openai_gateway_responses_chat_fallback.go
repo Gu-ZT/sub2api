@@ -453,29 +453,76 @@ func targetsOpenCodeZenUpstream(account *Account) bool {
 	return isOfficialOpenCodeHost(account.GetOpenAIBaseURL())
 }
 
+// targetsDeepSeekFamilyGateway 报告该账号上游是否是「DeepSeek 系聚合网关」：
+// 官方 OpenCode Zen / Go 或官方 Command Code。这类网关把 deepseek-* 模型转发给
+// DeepSeek 实际承载，上游的 reasoning 契约校验与 400 原文会原样回吐，因此网关侧
+// 必须按 DeepSeek 语义补齐 reasoning 回传。
+//
+// 不放宽成「任意中转站」：这些改写会往请求体里加字段，对没有该契约的上游属于
+// 无谓变更，且可能触发未知字段校验（见 requiresDeepSeekChatReasoning）。
+func targetsDeepSeekFamilyGateway(account *Account) bool {
+	if targetsOpenCodeZenUpstream(account) {
+		return true
+	}
+	if account == nil {
+		return false
+	}
+	if account.IsCommandCode() {
+		return true
+	}
+	return isOfficialCommandCodeHost(account.GetOpenAIBaseURL())
+}
+
 // isDeepSeekCatalogModel 判定（剥掉 opencode 前缀后的）模型 ID 是否属于
 // DeepSeek 系列，例如 deepseek-v4-flash / deepseek-v4.1-flash / deepseek-chat。
+// Command Code 的目录名带厂商前缀（deepseek/deepseek-v4-flash），首段即厂商，
+// 已由前缀匹配覆盖。
 func isDeepSeekCatalogModel(model string) bool {
 	return strings.HasPrefix(normalizeOpenCodeGoModelID(model), "deepseek")
+}
+
+// RequiresDeepSeekReasoningPassback 报告发往该账号、该模型的 Responses 请求是否
+// 必须携带 reasoning 明文回传。
+//
+// DeepSeek 官方 API（含 openai 平台但 base_url 指向 api.deepseek.com 的映射账号）
+// 直接命中。OpenCode Zen / Go 与 Command Code 是转发型订阅网关，deepseek-* 模型由
+// DeepSeek 实际承载，同一条 400 原文会被一字不差地回吐，所以补一条
+// 「DeepSeek 系聚合网关 + deepseek-* 模型」判定。
+func RequiresDeepSeekReasoningPassback(account *Account, model string) bool {
+	if targetsDeepSeekAPIHost(account) {
+		return true
+	}
+	if !targetsDeepSeekFamilyGateway(account) {
+		return false
+	}
+	return isDeepSeekCatalogModel(model)
+}
+
+// requiresDeepSeekReasoningPassback 是 RequiresDeepSeekReasoningPassback 的
+// body 便利封装：模型取请求体里的 model 字段，并按账号 model_mapping 归一为上游
+// 真正会看到的模型名（映射到 deepseek-* 时才需要补 reasoning 回传）。
+func requiresDeepSeekReasoningPassback(account *Account, body []byte) bool {
+	model := gjson.GetBytes(body, "model").String()
+	if account != nil && strings.TrimSpace(model) != "" {
+		model = account.GetMappedModel(model)
+	}
+	return RequiresDeepSeekReasoningPassback(account, model)
+}
+
+// RequiresDeepSeekReasoningPassbackForBody 是 requiresDeepSeekReasoningPassback
+// 的导出版本，供 handler 层在改写 failover 请求体前复用同一判定。
+func RequiresDeepSeekReasoningPassbackForBody(account *Account, body []byte) bool {
+	return requiresDeepSeekReasoningPassback(account, body)
 }
 
 // requiresDeepSeekChatReasoning 报告该 Chat Completions 请求的上游是否按
 // DeepSeek thinking mode 语义校验 reasoning_content。
 //
-// DeepSeek 官方 API 直接命中。OpenCode Zen / Go 是转发型订阅网关：deepseek-*
-// 模型由 DeepSeek 实际承载，同一条 400 原文会被一字不差地回吐，所以按
-// 「官方 OpenCode 上游 + deepseek-* 模型」补一条判定。
-//
-// 不放宽成「任意上游的 deepseek-* 模型名」：占位符是写进请求体的额外字段，
-// 对没有这条约束的上游属于无谓改写，且可能触发未知字段校验。
+// 判定与 Responses 侧共用 RequiresDeepSeekReasoningPassback，避免两条出站路径
+// 对同一上游给出不同结论。不放宽成「任意上游的 deepseek-* 模型名」：占位符是写进
+// 请求体的额外字段，对没有这条约束的上游属于无谓改写，且可能触发未知字段校验。
 func requiresDeepSeekChatReasoning(account *Account, body []byte) bool {
-	if targetsDeepSeekAPIHost(account) {
-		return true
-	}
-	if !targetsOpenCodeZenUpstream(account) {
-		return false
-	}
-	return isDeepSeekCatalogModel(gjson.GetBytes(body, "model").String())
+	return requiresDeepSeekReasoningPassback(account, body)
 }
 
 // ensureDeepSeekChatReasoningPlaceholders 给缺 reasoning_content 的 assistant

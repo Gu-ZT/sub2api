@@ -398,6 +398,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying passthrough request after %s (account: %s)", reason, account.Name)
 				continue
 			}
+			// DeepSeek thinking mode 的 reasoning 明文缺失是确定性拒绝：改写历史后
+			// 重发一次（见 repairDeepSeekResponsesReasoningRejection）。
+			if retryBody, repaired := s.repairDeepSeekResponsesReasoningRejection(account, body, probeBody); repaired &&
+				rejectedFieldRetryState.Allow(retryBody) {
+				body = retryBody
+				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying passthrough request after DeepSeek reasoning passback rejection (account: %s)", account.Name)
+				continue
+			}
 			if !agentTaskRecoveryTried && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, probeBody) {
 				agentTaskRecoveryTried = true
 				expectedTaskID := account.GetCredential("task_id")
@@ -611,6 +619,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 
 	// DeepSeek / Kimi 原生 Responses 端点为无状态实现（见 normalizeDeepSeekResponsesRequestBody）。
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
+	// DeepSeek thinking mode 的 reasoning 明文回传补齐，与非透传路径同一判定
+	// （见 ensureDeepSeekResponsesReasoningPassback）。
+	body = s.ensureDeepSeekResponsesReasoningPassback(account, body)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {

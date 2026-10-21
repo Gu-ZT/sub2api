@@ -1451,6 +1451,10 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 	if account == nil || !account.IsOpenAI() {
 		return body, false, nil
 	}
+	// DeepSeek 系上游要求历史 reasoning 明文回传（见 RequiresDeepSeekReasoningPassback）。
+	// 下面两条 OpenAI 语义归一化会删掉 reasoning item 或它的明文，恰好销毁这份
+	// 契约，因此对 DeepSeek 系目标跳过它们；其余归一化照旧。
+	keepReasoningReplay := RequiresDeepSeekReasoningPassback(account, gjson.GetBytes(body, "model").String())
 	normalized := body
 	changed := false
 	if account.IsOpenAIOAuthLike() {
@@ -1460,11 +1464,13 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 			return body, false, err
 		}
 	}
-	if next, normalizedReasoningContent, err := normalizeOpenAIResponsesReasoningContentReplay(normalized); err != nil {
-		return body, false, err
-	} else if normalizedReasoningContent {
-		normalized = next
-		changed = true
+	if !keepReasoningReplay {
+		if next, normalizedReasoningContent, err := normalizeOpenAIResponsesReasoningContentReplay(normalized); err != nil {
+			return body, false, err
+		} else if normalizedReasoningContent {
+			normalized = next
+			changed = true
+		}
 	}
 	if account.IsOpenAIApiKey() {
 		if next, normalizedParallel, err := normalizeOpenAIParallelToolCallsWithoutTools(normalized, responsesLite); err != nil {
@@ -1473,11 +1479,13 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 			normalized = next
 			changed = true
 		}
-		if next, normalizedReasoning, err := normalizeOpenAIAPIKeyStoreFalseReasoningReplay(normalized, false); err != nil {
-			return body, false, err
-		} else if normalizedReasoning {
-			normalized = next
-			changed = true
+		if !keepReasoningReplay {
+			if next, normalizedReasoning, err := normalizeOpenAIAPIKeyStoreFalseReasoningReplay(normalized, false); err != nil {
+				return body, false, err
+			} else if normalizedReasoning {
+				normalized = next
+				changed = true
+			}
 		}
 	}
 	if sanitized, idsChanged, err := sanitizeOpenAIResponsesInputItemIDs(normalized); err != nil {
