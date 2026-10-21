@@ -123,6 +123,9 @@ func (s *authRepoStub) ResetRateLimitWindows(ctx context.Context, id int64) erro
 func (s *authRepoStub) GetRateLimitData(ctx context.Context, id int64) (*APIKeyRateLimitData, error) {
 	panic("unexpected GetRateLimitData call")
 }
+func (s *authRepoStub) SetGroupRoutes(ctx context.Context, keyID int64, routes []APIKeyGroupRoute) error {
+	panic("unexpected SetGroupRoutes call")
+}
 
 type authCacheStub struct {
 	getAuthCache   func(ctx context.Context, key string) (*APIKeyAuthCacheEntry, error)

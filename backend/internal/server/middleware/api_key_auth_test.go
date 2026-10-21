@@ -1627,6 +1627,10 @@ func (r *stubApiKeyRepo) GetRateLimitData(ctx context.Context, id int64) (*servi
 	return nil, nil
 }
 
+func (r *stubApiKeyRepo) SetGroupRoutes(ctx context.Context, keyID int64, routes []service.APIKeyGroupRoute) error {
+	return nil
+}
+
 type stubUserSubscriptionRepo struct {
 	getByID        func(ctx context.Context, id int64) (*service.UserSubscription, error)
 	getActive      func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error)

@@ -2564,6 +2564,10 @@ func (r *stubApiKeyRepo) GetRateLimitData(ctx context.Context, id int64) (*servi
 	return nil, nil
 }
 
+func (r *stubApiKeyRepo) SetGroupRoutes(ctx context.Context, keyID int64, routes []service.APIKeyGroupRoute) error {
+	return nil
+}
+
 type stubUsageLogRepo struct {
 	userLogs map[int64][]service.UsageLog
 }
