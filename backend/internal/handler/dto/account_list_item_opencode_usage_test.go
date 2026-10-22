@@ -55,3 +55,27 @@ func TestAccountListItemFromAccount_CarriesOpenCodeGoUsage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(plainRaw), `"opencode_go_usage"`)
 }
+
+// Console v2 的 Go 基址（openai 平台 + /inference/go/openai）同样属于 Go 订阅，
+// 列表投影必须一并下发 eligible，否则该形态的账号在列表页看不到用量。
+func TestAccountListItemFromAccount_CarriesOpenCodeGoUsageForV2InferenceBase(t *testing.T) {
+	now := time.Now().UTC()
+	eligible := &service.Account{
+		ID: 166, Name: "OpenAI on OpenCode Go v2", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+		Credentials: map[string]any{"base_url": "https://opencode.ai/inference/go/openai/v1", "api_key": "test-key-v2"},
+		Extra: map[string]any{
+			service.OpenCodeGoUsageSnapshotExtraKey: &service.OpenCodeGoUsageSnapshot{
+				Status:        service.OpenCodeGoUsageStatusOK,
+				Data:          &service.OpenCodeGoUsageData{Rolling: service.OpenCodeGoUsageWindow{Status: "ok", Percent: 6}},
+				LastAttemptAt: now, NextRefreshAt: now.Add(time.Hour),
+			},
+		},
+		Status: service.StatusActive,
+	}
+
+	item := AccountListItemFromAccount(AccountFromServiceShallow(eligible))
+	require.NotNil(t, item.OpenCodeGoUsage)
+	require.True(t, item.OpenCodeGoUsage.Eligible)
+	require.NotNil(t, item.OpenCodeGoUsage.Snapshot)
+	require.Equal(t, 6.0, item.OpenCodeGoUsage.Snapshot.Data.Rolling.Percent)
+}

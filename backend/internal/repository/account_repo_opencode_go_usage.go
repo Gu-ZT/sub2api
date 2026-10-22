@@ -12,12 +12,14 @@ import (
 )
 
 const (
-	// 与 service.isOpenCodeGoBaseURL 对齐：Go 侧接受显式默认端口 :443（parsed.Host ==
-	// hostname+":443"）与两个官方基址变体（CC/Responses 的 /zen/go/v1 与 Anthropic
-	// 的 /zen/go），SQL 正则必须同样接受，否则同一 base_url 在 Go 判定 eligible 而
-	// SQL 判定不 eligible，身份清理与组查询会漏行。只做 parity，不扩域名/路径；
-	// Zen 基址（/zen、/zen/v1）必须拒绝。
-	opencodeGoBaseURLRegexSQL       = `^[hH][tT][tT][pP][sS]://[oO][pP][eE][nN][cC][oO][dD][eE]\.[aA][iI](:[4][4][3])?/[zZ][eE][nN]/[gG][oO](/[vV]1)?/?$`
+	// 与 service.normalizeOpenCodeGoBaseURL 对齐：Go 侧接受显式默认端口 :443
+	// （parsed.Host == hostname+":443"）与官方两套基址变体：
+	//   - 旧版 /zen/go/v1（Chat）与 /zen/go（Anthropic）
+	//   - Console v2 /inference/go/openai/v1 与 /inference/go/openai
+	// SQL 正则必须同样接受，否则同一 base_url 在 Go 判定 eligible 而 SQL 判定不
+	// eligible，身份清理与组查询会漏行。只做 parity，不扩域名/路径；Zen 基址
+	// （/zen、/zen/v1）与其它 inference 家族段必须拒绝。
+	opencodeGoBaseURLRegexSQL       = `^[hH][tT][tT][pP][sS]://[oO][pP][eE][nN][cC][oO][dD][eE]\.[aA][iI](:[4][4][3])?(/[zZ][eE][nN]/[gG][oO](/[vV]1)?|/[iI][nN][fF][eE][rR][eE][nN][cC][eE]/[gG][oO]/[oO][pP][eE][nN][aA][iI](/[vV]1)?)/?$`
 	opencodeGoBaseURLMatchSQLPrefix = "btrim("
 	opencodeGoBaseURLMatchSQLSuffix = ") ~ '" + opencodeGoBaseURLRegexSQL + "'"
 	// opencodeGoUsageMountPlatformsSQL 是 service.isOpenCodeGoUsageMountPlatform 的

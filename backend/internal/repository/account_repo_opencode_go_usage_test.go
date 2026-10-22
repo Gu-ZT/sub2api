@@ -361,6 +361,13 @@ func TestOpenCodeGoBaseURLRegexSQLAcceptsDefaultPort443(t *testing.T) {
 		"https://opencode.ai/zen/go/",
 		"https://opencode.ai:443/zen/go",
 		"HTTPS://OPENCODE.AI:443/ZEN/GO/V1",
+		// Console v2 Go 基址：与旧版同属 Go 订阅，只是换了 inference 路径段
+		"https://opencode.ai/inference/go/openai",
+		"https://opencode.ai/inference/go/openai/",
+		"https://opencode.ai/inference/go/openai/v1",
+		"https://opencode.ai/inference/go/openai/v1/",
+		"https://opencode.ai:443/inference/go/openai/v1",
+		"HTTPS://OPENCODE.AI:443/INFERENCE/GO/OPENAI/V1",
 	} {
 		require.True(t, re.MatchString(url), "SQL regex must accept %s", url)
 	}
@@ -374,6 +381,13 @@ func TestOpenCodeGoBaseURLRegexSQLAcceptsDefaultPort443(t *testing.T) {
 		"https://opencode.ai/zen/",
 		"https://opencode.ai/zen/v1",
 		"https://opencode.ai/zen/v1/",
+		// Console 按量付费与其它的 family 段不属于 Go 订阅
+		"https://opencode.ai/inference/openai/v1",
+		"https://opencode.ai/inference/go/anthropic/v1",
+		"https://opencode.ai/inference/go",
+		"https://opencode.ai/inference/go/v1",
+		"https://opencode.ai/inference/v1",
+		"https://opencode.ai:444/inference/go/openai/v1",
 		// 非官方 scheme / 子域 / 路径前缀拼接
 		"http://opencode.ai/zen/go/v1",
 		"https://www.opencode.ai/zen/go/v1",

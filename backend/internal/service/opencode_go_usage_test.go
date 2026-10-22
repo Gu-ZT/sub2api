@@ -302,6 +302,30 @@ func TestOpenCodeGoUsageRefresh200Success(t *testing.T) {
 	require.Equal(t, "application/json", stub.lastRequest.Header.Get("Accept"))
 }
 
+// TestOpenCodeGoUsageRefreshV2InferenceBase 验证 Console v2 基址
+// （/inference/go/openai/v1）的账号会请求对应的 v2 用量端点，而不是旧版
+// /zen/go/v1/usage。实测 v2 用量端点挂在 /inference/go/v1/usage 下。
+func TestOpenCodeGoUsageRefreshV2InferenceBase(t *testing.T) {
+	account := openCodeGoUsageAccount(7)
+	account.Credentials["base_url"] = "https://opencode.ai/inference/go/openai/v1"
+	account.Extra[OpenCodeGoUsageAutoRefreshExtraKey] = true
+	repo := &openCodeGoUsageTestRepo{accounts: map[int64]*Account{7: account}}
+	stub := &openCodeGoUsageHTTPStub{body: []byte(openCodeGoUsageFixture)}
+	svc := newOpenCodeGoUsageTestService(t, repo, stub, &upstreamBillingProbeSettingRepo{})
+
+	// 资格与端点都基于同一份 credentials["base_url"]；GetOpenAIBaseURL 必须原样返回
+	// 该值，否则判定与实际存储会各自看不同的字段。
+	require.Equal(t, "https://opencode.ai/inference/go/openai/v1", account.GetOpenAIBaseURL())
+
+	state, err := svc.Refresh(context.Background(), 7)
+	require.NoError(t, err)
+	require.True(t, state.Eligible)
+	require.Equal(t, OpenCodeGoUsageStatusOK, state.Snapshot.Status)
+	require.Equal(t, 6.0, state.Snapshot.Data.Rolling.Percent)
+	require.Equal(t, "https://opencode.ai/inference/go/v1/usage", stub.lastRequest.URL.String())
+	require.Equal(t, "Bearer key-7", stub.lastRequest.Header.Get("Authorization"))
+}
+
 func TestOpenCodeGoUsageRefresh401Unauthorized(t *testing.T) {
 	account := openCodeGoUsageAccount(7)
 	account.Extra[OpenCodeGoUsageAutoRefreshExtraKey] = true
@@ -799,6 +823,37 @@ func TestIsOpenCodeGoUsageAccount(t *testing.T) {
 	// zen paths are rejected (no subscription quota window)
 	for _, raw := range []string{
 		"https://opencode.ai/zen/v1", "https://opencode.ai/zen", "https://opencode.ai/zen/v1/",
+	} {
+		account = mount()
+		account.Credentials["base_url"] = raw
+		require.False(t, IsOpenCodeGoUsageAccount(account), raw)
+	}
+
+	// Console v2 Go base (/inference/go/openai) is the same Go subscription,
+	// exposed under the newer inference path family.
+	for _, raw := range []string{
+		"https://opencode.ai/inference/go/openai",
+		"https://opencode.ai/inference/go/openai/",
+		"https://opencode.ai/inference/go/openai/v1",
+		"https://opencode.ai/inference/go/openai/v1/",
+		"https://opencode.ai:443/inference/go/openai/v1",
+		"HTTPS://OPENCODE.AI/INFERENCE/GO/OPENAI/V1",
+	} {
+		account = mount()
+		account.Credentials["base_url"] = raw
+		require.True(t, IsOpenCodeGoUsageAccount(account), raw)
+	}
+
+	// Console pay-as-you-go inference paths and other families must stay out:
+	// /inference/openai is Zen-style pay-as-you-go with no subscription window.
+	for _, raw := range []string{
+		"https://opencode.ai/inference/openai/v1",
+		"https://opencode.ai/inference/go/anthropic/v1",
+		"https://opencode.ai/inference/go",
+		"https://opencode.ai/inference/go/v1",
+		"https://opencode.ai/inference/v1",
+		"https://opencode.ai:444/inference/go/openai/v1",
+		"https://opencode.ai/inference/go/openai/v1?x=1",
 	} {
 		account = mount()
 		account.Credentials["base_url"] = raw

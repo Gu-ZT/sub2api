@@ -26,6 +26,14 @@ import (
 )
 
 const (
+	// 官方 OpenCode Go 的两套基址与其用量端点路径。旧版在 /zen/go 段下，Console
+	// v2 在 /inference/go 段下；用量端点都挂在版本段之后，不随 OpenAI 家族段
+	// （/inference/go/openai/...）走——实测那个形态返回 404。
+	openCodeV1GoBasePath  = "/zen/go"
+	openCodeV1GoUsagePath = "/zen/go/v1/usage"
+	openCodeV2GoBasePath  = "/inference/go"
+	openCodeV2GoUsagePath = "/inference/go/v1/usage"
+
 	OpenCodeGoUsageAutoRefreshExtraKey = "opencode_go_usage_auto_refresh"
 	OpenCodeGoUsageSnapshotExtraKey    = "opencode_go_usage_snapshot"
 
@@ -36,7 +44,7 @@ const (
 	// floor inside the SQL due filter.
 	OpenCodeGoUsageMinFetchInterval = opencodeGoUsageMinIntervalMinutes * time.Minute
 
-	opencodeGoUsageAPIURL                 = "https://opencode.ai/zen/go/v1/usage"
+	opencodeGoUsageAPIURL                 = "https://opencode.ai" + openCodeV1GoUsagePath
 	opencodeGoUsageDefaultIntervalMinutes = 15
 	opencodeGoUsageMinIntervalMinutes     = 5
 	opencodeGoUsageMaxIntervalMinutes     = 24 * 60
@@ -754,7 +762,11 @@ func (s *OpenCodeGoUsageService) refreshLoadedAccount(ctx context.Context, accou
 	}
 	requestCtx, cancel := context.WithTimeout(WithHTTPUpstreamRedirectsDisabled(ctx), opencodeGoUsageRequestTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, opencodeGoUsageAPIURL, nil)
+	usageURL, err := openCodeGoUsageURLForAccount(account)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, usageURL, nil)
 	if err != nil || !isExactOpenCodeGoUsageURL(req.URL) {
 		return nil, ErrOpenCodeGoUsageUnavailable
 	}
@@ -909,30 +921,67 @@ func IsOpenCodeGoUsageAccount(account *Account) bool {
 	return isOpenCodeGoBaseURL(baseURL)
 }
 
-func isOpenCodeGoBaseURL(raw string) bool {
+// openCodeGoUsageBasePath 报告该官方基址形态对应的用量端点路径。
+//
+// OpenCode 有两套官方 Go 基址：旧版 /zen/go（Chat 为 /zen/go/v1、Anthropic 为
+// /zen/go）与 Console v2 的 /inference/go/<family>（Chat 为 /inference/go/openai/v1）。
+// 两者的用量端点都在各自的版本段下（实测 /zen/go/v1/usage 与 /inference/go/v1/usage
+// 均返回 401 即存在，而 /inference/go/openai/v1/usage 返回 404），因此不能统一改写
+// 到旧路径，必须按基址形态映射。
+func openCodeGoUsageBasePath(raw string) (string, bool) {
+	normalized, ok := normalizeOpenCodeGoBaseURL(raw)
+	if !ok {
+		return "", false
+	}
+	if normalized == openCodeV2GoBasePath {
+		return openCodeV2GoUsagePath, true
+	}
+	return openCodeV1GoUsagePath, true
+}
+
+// normalizeOpenCodeGoBaseURL 把官方 OpenCode Go 基址归一为其版本段前缀。
+//
+// 接受的官方形态（大小写不敏感，允许尾斜杠与显式 :443）：
+//   - /zen/go/v1、/zen/go           → 归一为 /zen/go（旧版；Anthropic 与 Chat 共用）
+//   - /inference/go/openai/v1、
+//     /inference/go/openai          → 归一为 /inference/go（Console v2 的 OpenAI 家族）
+//
+// Zen 按量付费基址（/zen、/zen/v1）不在此列：它没有订阅配额窗口。
+func normalizeOpenCodeGoBaseURL(raw string) (string, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || strings.ContainsAny(raw, "?#") {
-		return false
+		return "", false
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Opaque != "" || !strings.EqualFold(parsed.Scheme, "https") || parsed.User != nil || parsed.ForceQuery || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawFragment != "" {
-		return false
+		return "", false
 	}
 	hostname := strings.ToLower(parsed.Hostname())
 	if hostname != "opencode.ai" {
-		return false
+		return "", false
 	}
 	authority := strings.ToLower(parsed.Host)
 	if authority != hostname && authority != hostname+":443" {
-		return false
+		return "", false
 	}
 	if parsed.RawPath != "" {
-		return false
+		return "", false
 	}
-	// 官方两个基址变体：CC/Responses 的 /zen/go/v1 与 Anthropic 的 /zen/go。
-	// TrimSuffix 归一尾斜杠后，Zen 基址（/zen、/zen/v1）自然被拒绝。
-	path := strings.TrimSuffix(parsed.Path, "/")
-	return strings.EqualFold(path, "/zen/go/v1") || strings.EqualFold(path, "/zen/go")
+	path := strings.ToLower(strings.TrimSuffix(parsed.Path, "/"))
+	switch path {
+	case "/zen/go/v1", "/zen/go":
+		return openCodeV1GoBasePath, true
+	case "/inference/go/openai/v1", "/inference/go/openai":
+		return openCodeV2GoBasePath, true
+	default:
+		return "", false
+	}
+}
+
+// isOpenCodeGoBaseURL 报告 base_url 是否指向官方 OpenCode Go 订阅基址。
+func isOpenCodeGoBaseURL(raw string) bool {
+	_, ok := normalizeOpenCodeGoBaseURL(raw)
+	return ok
 }
 
 // openCodeGoUsageIdentity 返回 OpenCode Go 用量组的身份。host 固定为 opencode.ai、
@@ -963,9 +1012,37 @@ func openCodeGoUsageGroupFingerprint(account *Account) (string, bool) {
 	return hex.EncodeToString(sum[:]), true
 }
 
+// openCodeGoUsageURLForAccount 按账号实际基址形态选出用量端点。
+//
+// 挂载平台账号（openai 等）的资格来自 base_url，端点自然跟随该 base_url 的版本段。
+// 平台账号（opencode_go）不校验 base_url、可能是任意中转地址，此时无从判断账号
+// 属于哪套官方基址，回落到旧版端点：旧版对同一订阅 key 仍返回相同额度窗口，且
+// 保持该分支既有行为不变。
+func openCodeGoUsageURLForAccount(account *Account) (string, error) {
+	if account == nil {
+		return "", ErrOpenCodeGoUsageAccountInvalid
+	}
+	if !account.IsOpenCodeGo() {
+		baseURL, _ := account.Credentials["base_url"].(string)
+		if path, ok := openCodeGoUsageBasePath(baseURL); ok {
+			return "https://opencode.ai" + path, nil
+		}
+		return "", ErrOpenCodeGoUsageAccountInvalid
+	}
+	if baseURL, _ := account.Credentials["base_url"].(string); baseURL != "" {
+		if path, ok := openCodeGoUsageBasePath(baseURL); ok {
+			return "https://opencode.ai" + path, nil
+		}
+	}
+	return opencodeGoUsageAPIURL, nil
+}
+
 func isExactOpenCodeGoUsageURL(parsed *url.URL) bool {
-	return parsed != nil && parsed.Scheme == "https" && parsed.Host == "opencode.ai" && parsed.Path == "/zen/go/v1/usage" &&
-		parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && parsed.RawPath == ""
+	if parsed == nil || parsed.Scheme != "https" || parsed.Host != "opencode.ai" ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
+		return false
+	}
+	return parsed.Path == openCodeV1GoUsagePath || parsed.Path == openCodeV2GoUsagePath
 }
 
 func openCodeGoUsageAutoRefreshEnabled(account *Account) bool {
