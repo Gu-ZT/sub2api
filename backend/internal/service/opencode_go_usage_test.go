@@ -962,6 +962,15 @@ func TestOpenCodeGoUsageGroupFingerprint(t *testing.T) {
 	account.Credentials["base_url"] = "https://opencode.ai/v1"
 	_, ok := openCodeGoUsageGroupFingerprint(account)
 	require.False(t, ok)
+
+	// 旧版 /zen/go 与 v2 /inference/go/openai 是同一订阅的两种接入形态：同 key 必须
+	// 同组，共用一次外呼与同一份快照。两套用量端点查询的是同一额度窗口（实测均为
+	// 401 存在），因此由哪一侧先刷新不会让快照含义漂移。
+	v2 := openCodeGoUsageAccount(7)
+	v2.Credentials = map[string]any{"base_url": "https://opencode.ai/inference/go/openai/v1", "api_key": "shared-key"}
+	v2FP, v2OK := openCodeGoUsageGroupFingerprint(v2)
+	require.True(t, v2OK)
+	require.Equal(t, firstFP, v2FP, "v1 and v2 bases of the same subscription must share a group")
 }
 
 func TestScheduleOpenCodeGoUsageActivityOnlyForOpenCode(t *testing.T) {
